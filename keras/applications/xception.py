@@ -24,12 +24,20 @@ import warnings
 
 from ..models import Model
 from .. import layers
-from ..layers import Dense, Input, BatchNormalization, Activation
-from ..layers import Conv2D, SeparableConv2D, MaxPooling2D, GlobalAveragePooling2D, GlobalMaxPooling2D
+from ..layers import Dense
+from ..layers import Input
+from ..layers import BatchNormalization
+from ..layers import Activation
+from ..layers import Conv2D
+from ..layers import SeparableConv2D
+from ..layers import MaxPooling2D
+from ..layers import GlobalAveragePooling2D
+from ..layers import GlobalMaxPooling2D
 from ..engine.topology import get_source_inputs
 from ..utils.data_utils import get_file
 from .. import backend as K
-from .imagenet_utils import decode_predictions, _obtain_input_shape
+from .imagenet_utils import decode_predictions
+from .imagenet_utils import _obtain_input_shape
 
 
 TF_WEIGHTS_PATH = 'https://github.com/fchollet/deep-learning-models/releases/download/v0.4/xception_weights_tf_dim_ordering_tf_kernels.h5'
@@ -40,8 +48,9 @@ def Xception(include_top=True, weights='imagenet',
              input_tensor=None, input_shape=None,
              pooling=None,
              classes=1000):
-    """Instantiate the Xception architecture,
-    optionally loading weights pre-trained
+    """Instantiates the Xception architecture.
+
+    Optionally loads weights pre-trained
     on ImageNet. This model is available for TensorFlow only,
     and can only be used with inputs following the TensorFlow
     data format `(width, height, channels)`.
@@ -80,6 +89,12 @@ def Xception(include_top=True, weights='imagenet',
 
     # Returns
         A Keras model instance.
+
+    # Raises
+        ValueError: in case of invalid argument for `weights`,
+            or invalid input shape.
+        RuntimeError: If attempting to run this model with a
+            backend that does not support separable convolutions.
     """
     if weights not in {'imagenet', None}:
         raise ValueError('The `weights` argument should be either '
@@ -141,7 +156,7 @@ def Xception(include_top=True, weights='imagenet',
     x = BatchNormalization(name='block2_sepconv2_bn')(x)
 
     x = MaxPooling2D((3, 3), strides=(2, 2), padding='same', name='block2_pool')(x)
-    x = layers.sum([x, residual])
+    x = layers.add([x, residual])
 
     residual = Conv2D(256, (1, 1), strides=(2, 2),
                       padding='same', use_bias=False)(x)
@@ -155,7 +170,7 @@ def Xception(include_top=True, weights='imagenet',
     x = BatchNormalization(name='block3_sepconv2_bn')(x)
 
     x = MaxPooling2D((3, 3), strides=(2, 2), padding='same', name='block3_pool')(x)
-    x = layers.sum([x, residual])
+    x = layers.add([x, residual])
 
     residual = Conv2D(728, (1, 1), strides=(2, 2),
                       padding='same', use_bias=False)(x)
@@ -169,7 +184,7 @@ def Xception(include_top=True, weights='imagenet',
     x = BatchNormalization(name='block4_sepconv2_bn')(x)
 
     x = MaxPooling2D((3, 3), strides=(2, 2), padding='same', name='block4_pool')(x)
-    x = layers.sum([x, residual])
+    x = layers.add([x, residual])
 
     for i in range(8):
         residual = x
@@ -185,7 +200,7 @@ def Xception(include_top=True, weights='imagenet',
         x = SeparableConv2D(728, (3, 3), padding='same', use_bias=False, name=prefix + '_sepconv3')(x)
         x = BatchNormalization(name=prefix + '_sepconv3_bn')(x)
 
-        x = layers.sum([x, residual])
+        x = layers.add([x, residual])
 
     residual = Conv2D(1024, (1, 1), strides=(2, 2),
                       padding='same', use_bias=False)(x)
@@ -199,7 +214,7 @@ def Xception(include_top=True, weights='imagenet',
     x = BatchNormalization(name='block13_sepconv2_bn')(x)
 
     x = MaxPooling2D((3, 3), strides=(2, 2), padding='same', name='block13_pool')(x)
-    x = layers.sum([x, residual])
+    x = layers.add([x, residual])
 
     x = SeparableConv2D(1536, (3, 3), padding='same', use_bias=False, name='block14_sepconv1')(x)
     x = BatchNormalization(name='block14_sepconv1_bn')(x)

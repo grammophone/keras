@@ -6,13 +6,12 @@ import numpy as np
 
 from keras import backend as K
 from keras.models import Sequential
-from keras.layers import Dense, Activation, Lambda
+from keras.layers import Dense, Activation
 from keras.utils import np_utils
 from keras.utils.test_utils import get_test_data, keras_test
 from keras.models import model_from_json, model_from_yaml
 from keras import losses
-from keras.engine.training import make_batches
-from keras.legacy.layers import Merge
+from keras.engine.training import _make_batches
 
 
 input_dim = 16
@@ -82,11 +81,13 @@ def test_sequential_fit_generator():
     model.add(Activation('softmax'))
     model.compile(loss='categorical_crossentropy', optimizer='rmsprop')
 
-    model.fit_generator(data_generator(True), len(x_train), epochs)
-    model.fit_generator(data_generator(True), len(x_train), epochs, validation_data=(x_test, y_test))
-    model.fit_generator(data_generator(True), len(x_train), epochs,
-                        validation_data=data_generator(False), num_val_samples=batch_size * 3)
-    model.fit_generator(data_generator(True), len(x_train), epochs, max_q_size=2)
+    model.fit_generator(data_generator(True), 5, epochs)
+    model.fit_generator(data_generator(True), 5, epochs,
+                        validation_data=(x_test, y_test))
+    model.fit_generator(data_generator(True), 5, epochs,
+                        validation_data=data_generator(False),
+                        validation_steps=3)
+    model.fit_generator(data_generator(True), 5, epochs, max_q_size=2)
     model.evaluate(x_train, y_train)
 
 
@@ -98,7 +99,7 @@ def test_sequential():
     def data_generator(x, y, batch_size=50):
         index_array = np.arange(len(x))
         while 1:
-            batches = make_batches(len(x_test), batch_size)
+            batches = _make_batches(len(x_test), batch_size)
             for batch_index, (batch_start, batch_end) in enumerate(batches):
                 batch_ids = index_array[batch_start:batch_end]
                 x_batch = x[batch_ids]
@@ -121,8 +122,8 @@ def test_sequential():
 
     loss = model.evaluate(x_test, y_test)
 
-    prediction = model.predict_generator(data_generator(x_test, y_test), x_test.shape[0], max_q_size=2)
-    gen_loss = model.evaluate_generator(data_generator(x_test, y_test, 50), x_test.shape[0], max_q_size=2)
+    prediction = model.predict_generator(data_generator(x_test, y_test), 1, max_q_size=2)
+    gen_loss = model.evaluate_generator(data_generator(x_test, y_test, 50), 1, max_q_size=2)
     pred_loss = K.eval(K.mean(losses.get(model.loss)(K.variable(y_test), K.variable(prediction))))
 
     assert(np.isclose(pred_loss, loss))

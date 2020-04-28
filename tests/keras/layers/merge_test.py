@@ -9,11 +9,11 @@ from keras.layers import merge
 
 
 @keras_test
-def test_merge_sum():
+def test_merge_add():
     i1 = layers.Input(shape=(4, 5))
     i2 = layers.Input(shape=(4, 5))
     i3 = layers.Input(shape=(4, 5))
-    o = layers.sum([i1, i2, i3])
+    o = layers.add([i1, i2, i3])
     assert o._keras_shape == (None, 4, 5)
     model = models.Model([i1, i2, i3], o)
 
@@ -111,7 +111,6 @@ def test_merge_dot():
     out = model.predict([x1, x2])
     assert out.shape == (2, 1)
     assert_allclose(out, expected, atol=1e-4)
-
 
 
 if __name__ == '__main__':

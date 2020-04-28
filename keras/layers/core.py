@@ -19,6 +19,7 @@ from ..engine import Layer
 from ..utils.generic_utils import func_dump
 from ..utils.generic_utils import func_load
 from ..utils.generic_utils import deserialize_keras_object
+from ..legacy import interfaces
 
 
 class Masking(Layer):
@@ -88,7 +89,7 @@ class Dropout(Layer):
     # References
         - [Dropout: A Simple Way to Prevent Neural Networks from Overfitting](http://www.cs.toronto.edu/~rsalakhu/papers/srivastava14a.pdf)
     """
-
+    @interfaces.legacy_dropout_support
     def __init__(self, rate, noise_shape=None, seed=None, **kwargs):
         super(Dropout, self).__init__(**kwargs)
         self.rate = min(1., max(0., rate))
@@ -141,6 +142,7 @@ class SpatialDropout1D(Dropout):
         - [Efficient Object Localization Using Convolutional Networks](https://arxiv.org/abs/1411.4280)
     """
 
+    @interfaces.legacy_spatialdropout1d_support
     def __init__(self, rate, **kwargs):
         super(SpatialDropout1D, self).__init__(rate, **kwargs)
         self.input_spec = InputSpec(ndim=3)
@@ -185,6 +187,7 @@ class SpatialDropout2D(Dropout):
         - [Efficient Object Localization Using Convolutional Networks](https://arxiv.org/abs/1411.4280)
     """
 
+    @interfaces.legacy_spatialdropoutNd_support
     def __init__(self, rate, data_format=None, **kwargs):
         super(SpatialDropout2D, self).__init__(rate, **kwargs)
         if data_format is None:
@@ -239,6 +242,7 @@ class SpatialDropout3D(Dropout):
         - [Efficient Object Localization Using Convolutional Networks](https://arxiv.org/abs/1411.4280)
     """
 
+    @interfaces.legacy_spatialdropoutNd_support
     def __init__(self, rate, data_format=None, **kwargs):
         super(SpatialDropout3D, self).__init__(rate, **kwargs)
         if data_format is None:
@@ -591,6 +595,7 @@ class Lambda(Layer):
         (or auto-inferred when using TensorFlow).
     """
 
+    @interfaces.legacy_lambda_support
     def __init__(self, function, output_shape=None,
                  mask=None, arguments=None, **kwargs):
         super(Lambda, self).__init__(**kwargs)
@@ -688,7 +693,7 @@ class Lambda(Layer):
     def from_config(cls, config, custom_objects=None):
         globs = globals()
         if custom_objects:
-            globs = dict(globs.items() + custom_objects.items())
+            globs = dict(list(globs.items()) + list(custom_objects.items()))
         function_type = config.pop('function_type')
         if function_type == 'function':
             # Simple lookup in custom objects
@@ -783,6 +788,7 @@ class Dense(Layer):
         the output would have shape `(batch_size, units)`.
     """
 
+    @interfaces.legacy_dense_support
     def __init__(self, units,
                  activation=None,
                  use_bias=True,
@@ -812,11 +818,7 @@ class Dense(Layer):
 
     def build(self, input_shape):
         assert len(input_shape) >= 2
-
         input_dim = input_shape[-1]
-        # TODO: check last dim in input_dim
-        self.input_spec = [InputSpec(dtype=K.floatx(),
-                                     ndim='2+')]
 
         self.kernel = self.add_weight((input_dim, self.units),
                                       initializer=self.kernel_initializer,
@@ -837,7 +839,7 @@ class Dense(Layer):
     def call(self, inputs):
         output = K.dot(inputs, self.kernel)
         if self.use_bias:
-            output += self.bias
+            output = K.bias_add(output, self.bias)
         if self.activation is not None:
             output = self.activation(output)
         return output

@@ -55,11 +55,11 @@ def normalize_data_format(value):
 
 def normalize_padding(value):
     padding = value.lower()
-    allowed = {'valid', 'same'}
+    allowed = {'valid', 'same', 'causal'}
     if K.backend() == 'theano':
         allowed.add('full')
     if padding not in allowed:
-        raise ValueError('The `padding` argument must be one of "valid", "same". '
+        raise ValueError('The `padding` argument must be one of "valid", "same" (or "causal" for Conv1D). '
                          'Received: ' + str(padding))
     return padding
 
@@ -102,12 +102,14 @@ def conv_output_length(input_length, filter_size,
     """
     if input_length is None:
         return None
-    assert padding in {'same', 'valid', 'full'}
+    assert padding in {'same', 'valid', 'full', 'causal'}
     dilated_filter_size = filter_size + (filter_size - 1) * (dilation - 1)
     if padding == 'same':
         output_length = input_length
     elif padding == 'valid':
         output_length = input_length - dilated_filter_size + 1
+    elif padding == 'causal':
+        output_length = input_length
     elif padding == 'full':
         output_length = input_length + dilated_filter_size - 1
     return (output_length + stride - 1) // stride
@@ -142,4 +144,6 @@ def deconv_length(dim_size, stride_size, kernel_size, padding):
         dim_size *= stride_size
     if padding == 'valid' and dim_size is not None:
         dim_size += max(kernel_size - stride_size, 0)
+    if padding == 'full' and dim_size is not None:
+        dim_size -= stride_size + kernel_size - 2
     return dim_size

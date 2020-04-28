@@ -12,27 +12,33 @@ from __future__ import absolute_import
 import warnings
 
 from ..models import Model
-from ..layers import Flatten, Dense, Input
-from ..layers import Conv2D, MaxPooling2D, GlobalAveragePooling2D, GlobalMaxPooling2D
+from ..layers import Flatten
+from ..layers import Dense
+from ..layers import Input
+from ..layers import Conv2D
+from ..layers import MaxPooling2D
+from ..layers import GlobalAveragePooling2D
+from ..layers import GlobalMaxPooling2D
 from ..engine.topology import get_source_inputs
-from ..utils.layer_utils import convert_all_kernels_in_model
+from ..utils import layer_utils
 from ..utils.data_utils import get_file
 from .. import backend as K
-from .imagenet_utils import decode_predictions, preprocess_input, _obtain_input_shape
+from .imagenet_utils import decode_predictions
+from .imagenet_utils import preprocess_input
+from .imagenet_utils import _obtain_input_shape
 
 
-TH_WEIGHTS_PATH = 'https://github.com/fchollet/deep-learning-models/releases/download/v0.1/vgg19_weights_th_dim_ordering_th_kernels.h5'
-TF_WEIGHTS_PATH = 'https://github.com/fchollet/deep-learning-models/releases/download/v0.1/vgg19_weights_tf_dim_ordering_tf_kernels.h5'
-TH_WEIGHTS_PATH_NO_TOP = 'https://github.com/fchollet/deep-learning-models/releases/download/v0.1/vgg19_weights_th_dim_ordering_th_kernels_notop.h5'
-TF_WEIGHTS_PATH_NO_TOP = 'https://github.com/fchollet/deep-learning-models/releases/download/v0.1/vgg19_weights_tf_dim_ordering_tf_kernels_notop.h5'
+WEIGHTS_PATH = 'https://github.com/fchollet/deep-learning-models/releases/download/v0.1/vgg19_weights_tf_dim_ordering_tf_kernels.h5'
+WEIGHTS_PATH_NO_TOP = 'https://github.com/fchollet/deep-learning-models/releases/download/v0.1/vgg19_weights_tf_dim_ordering_tf_kernels_notop.h5'
 
 
 def VGG19(include_top=True, weights='imagenet',
           input_tensor=None, input_shape=None,
           pooling=None,
           classes=1000):
-    """Instantiate the VGG19 architecture,
-    optionally loading weights pre-trained
+    """Instantiates the VGG19 architecture.
+
+    Optionally loads weights pre-trained
     on ImageNet. Note that when using TensorFlow,
     for best performance you should set
     `image_data_format="channels_last"` in your Keras config
@@ -74,6 +80,10 @@ def VGG19(include_top=True, weights='imagenet',
 
     # Returns
         A Keras model instance.
+
+    # Raises
+        ValueError: in case of invalid argument for `weights`,
+            or invalid input shape.
     """
     if weights not in {'imagenet', None}:
         raise ValueError('The `weights` argument should be either '
@@ -151,16 +161,25 @@ def VGG19(include_top=True, weights='imagenet',
 
     # load weights
     if weights == 'imagenet':
+        if include_top:
+            weights_path = get_file('vgg19_weights_tf_dim_ordering_tf_kernels.h5',
+                                    WEIGHTS_PATH,
+                                    cache_subdir='models')
+        else:
+            weights_path = get_file('vgg19_weights_tf_dim_ordering_tf_kernels_notop.h5',
+                                    WEIGHTS_PATH_NO_TOP,
+                                    cache_subdir='models')
+        model.load_weights(weights_path)
+        if K.backend() == 'theano':
+            layer_utils.convert_all_kernels_in_model(model)
+
         if K.image_data_format() == 'channels_first':
             if include_top:
-                weights_path = get_file('vgg19_weights_th_dim_ordering_th_kernels.h5',
-                                        TH_WEIGHTS_PATH,
-                                        cache_subdir='models')
-            else:
-                weights_path = get_file('vgg19_weights_th_dim_ordering_th_kernels_notop.h5',
-                                        TH_WEIGHTS_PATH_NO_TOP,
-                                        cache_subdir='models')
-            model.load_weights(weights_path)
+                maxpool = model.get_layer(name='block5_pool')
+                shape = maxpool.output_shape[1:]
+                dense = model.get_layer(name='fc1')
+                layer_utils.convert_dense_weights_data_format(dense, shape, 'channels_first')
+
             if K.backend() == 'tensorflow':
                 warnings.warn('You are using the TensorFlow backend, yet you '
                               'are using the Theano '
@@ -170,17 +189,4 @@ def VGG19(include_top=True, weights='imagenet',
                               '`image_data_format="channels_last"` in '
                               'your Keras config '
                               'at ~/.keras/keras.json.')
-                convert_all_kernels_in_model(model)
-        else:
-            if include_top:
-                weights_path = get_file('vgg19_weights_tf_dim_ordering_tf_kernels.h5',
-                                        TF_WEIGHTS_PATH,
-                                        cache_subdir='models')
-            else:
-                weights_path = get_file('vgg19_weights_tf_dim_ordering_tf_kernels_notop.h5',
-                                        TF_WEIGHTS_PATH_NO_TOP,
-                                        cache_subdir='models')
-            model.load_weights(weights_path)
-            if K.backend() == 'theano':
-                convert_all_kernels_in_model(model)
     return model

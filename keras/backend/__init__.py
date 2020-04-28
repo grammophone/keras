@@ -11,8 +11,6 @@ from .common import cast_to_floatx
 from .common import image_data_format
 from .common import set_image_data_format
 from .common import is_keras_tensor
-from .common import legacy_weight_ordering
-from .common import set_legacy_weight_ordering
 
 _keras_base_dir = os.path.expanduser('~')
 if not os.access(_keras_base_dir, os.W_OK):
@@ -35,7 +33,7 @@ if os.path.exists(_config_path):
     _backend = _config.get('backend', _BACKEND)
     assert _backend in {'theano', 'tensorflow'}
     _image_data_format = _config.get('image_data_format',
-                                      image_data_format())
+                                     image_data_format())
     assert _image_data_format in {'channels_last', 'channels_first'}
 
     set_floatx(_floatx)

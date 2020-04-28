@@ -66,7 +66,7 @@ class Merge(Layer):
         warnings.warn('The `Merge` layer is deprecated '
                       'and will be removed after 08/2017. '
                       'Use instead layers from `keras.layers.merge`, '
-                      'e.g. `sum`, `concatenate`, etc.')
+                      'e.g. `add`, `concatenate`, etc.')
         self.layers = layers
         self.mode = mode
         self.concat_axis = concat_axis
@@ -248,7 +248,6 @@ class Merge(Layer):
             elif self._output_shape is not None:
                 return (input_shape[0][0],) + tuple(self._output_shape)
             else:
-                # TODO: consider shape auto-inference with TF.
                 raise ValueError('The Merge layer ' + self.name +
                                  ' has a callable `mode` argument, '
                                  'and we cannot infer its output shape '
@@ -727,3 +726,31 @@ class Highway(Layer):
                   'input_dim': self.input_dim}
         base_config = super(Highway, self).get_config()
         return dict(list(base_config.items()) + list(config.items()))
+
+
+def AtrousConvolution1D(*args, **kwargs):
+    from ..layers import Conv1D
+    if 'atrous_rate' in kwargs:
+        rate = kwargs.pop('atrous_rate')
+    else:
+        rate = 1
+    kwargs['dilation_rate'] = rate
+    warnings.warn('The `AtrousConvolution1D` layer '
+                  ' has been deprecated. Use instead '
+                  'the `Conv1D` layer with the `dilation_rate` '
+                  'argument.')
+    return Conv1D(*args, **kwargs)
+
+
+def AtrousConvolution2D(*args, **kwargs):
+    from ..layers import Conv2D
+    if 'atrous_rate' in kwargs:
+        rate = kwargs.pop('atrous_rate')
+    else:
+        rate = 1
+    kwargs['dilation_rate'] = rate
+    warnings.warn('The `AtrousConvolution2D` layer '
+                  ' has been deprecated. Use instead '
+                  'the `Conv2D` layer with the `dilation_rate` '
+                  'argument.')
+    return Conv2D(*args, **kwargs)

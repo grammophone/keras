@@ -82,14 +82,18 @@ class BaseWrapper(object):
 
         for params_name in params:
             if params_name not in legal_params:
-                raise ValueError('{} is not a legal parameter'.format(params_name))
+                if params_name != 'nb_epoch':
+                    raise ValueError(
+                        '{} is not a legal parameter'.format(params_name))
 
     def get_params(self, **params):
         """Gets parameters for this estimator.
 
+        # Arguments
+            **params: ignored (exists for API compatiblity).
+
         # Returns
-            params : dict
-                Dictionary of parameter names mapped to their values.
+            Dictionary of parameter names mapped to their values.
         """
         res = copy.deepcopy(self.sk_params)
         res.update({'build_fn': self.build_fn})

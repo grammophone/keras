@@ -13,8 +13,7 @@ from collections import deque
 from collections import OrderedDict
 from collections import Iterable
 from .utils.generic_utils import Progbar
-from keras import backend as K
-from pkg_resources import parse_version
+from . import backend as K
 
 try:
     import requests
@@ -228,7 +227,24 @@ class BaseLogger(Callback):
 
 class ProgbarLogger(Callback):
     """Callback that prints metrics to stdout.
+
+    # Arguments
+        count_mode: One of "steps" or "samples".
+            Whether the progress bar should
+            count samples seens or steps (batches) seen.
+
+    # Raises
+        ValueError: In case of invalid `count_mode`.
     """
+
+    def __init__(self, count_mode='samples'):
+        super(ProgbarLogger, self).__init__()
+        if count_mode == 'samples':
+            self.use_steps = False
+        elif count_mode == 'steps':
+            self.use_steps = True
+        else:
+            raise ValueError('Unknown `count_mode`: ' + str(count_mode))
 
     def on_train_begin(self, logs=None):
         self.verbose = self.params['verbose']
@@ -237,18 +253,26 @@ class ProgbarLogger(Callback):
     def on_epoch_begin(self, epoch, logs=None):
         if self.verbose:
             print('Epoch %d/%d' % (epoch + 1, self.epochs))
-            self.progbar = Progbar(target=self.params['samples'],
+            if self.use_steps:
+                target = self.params['steps']
+            else:
+                target = self.params['samples']
+            self.target = target
+            self.progbar = Progbar(target=self.target,
                                    verbose=self.verbose)
         self.seen = 0
 
     def on_batch_begin(self, batch, logs=None):
-        if self.seen < self.params['samples']:
+        if self.seen < self.target:
             self.log_values = []
 
     def on_batch_end(self, batch, logs=None):
         logs = logs or {}
         batch_size = logs.get('size', 0)
-        self.seen += batch_size
+        if self.use_steps:
+            self.seen += 1
+        else:
+            self.seen += batch_size
 
         for k in self.params['metrics']:
             if k in logs:
@@ -256,7 +280,7 @@ class ProgbarLogger(Callback):
 
         # Skip progbar update for the last batch;
         # will be handled by on_epoch_end.
-        if self.verbose and self.seen < self.params['samples']:
+        if self.verbose and self.seen < self.target:
             self.progbar.update(self.seen, self.log_values)
 
     def on_epoch_end(self, epoch, logs=None):
@@ -587,56 +611,27 @@ class TensorBoard(Callback):
             for layer in self.model.layers:
 
                 for weight in layer.weights:
-                    if hasattr(tf, 'histogram_summary'):
-                        tf.histogram_summary(weight.name, weight)
-                    else:
-                        tf.summary.histogram(weight.name, weight)
-
+                    tf.summary.histogram(weight.name, weight)
                     if self.write_images:
                         w_img = tf.squeeze(weight)
-
                         shape = w_img.get_shape()
                         if len(shape) > 1 and shape[0] > shape[1]:
                             w_img = tf.transpose(w_img)
-
                         if len(shape) == 1:
                             w_img = tf.expand_dims(w_img, 0)
-
                         w_img = tf.expand_dims(tf.expand_dims(w_img, 0), -1)
-
-                        if hasattr(tf, 'image_summary'):
-                            tf.image_summary(weight.name, w_img)
-                        else:
-                            tf.summary.image(weight.name, w_img)
+                        tf.summary.image(weight.name, w_img)
 
                 if hasattr(layer, 'output'):
-                    if hasattr(tf, 'histogram_summary'):
-                        tf.histogram_summary('{}_out'.format(layer.name),
-                                             layer.output)
-                    else:
-                        tf.summary.histogram('{}_out'.format(layer.name),
-                                             layer.output)
-
-        if hasattr(tf, 'merge_all_summaries'):
-            self.merged = tf.merge_all_summaries()
-        else:
-            self.merged = tf.summary.merge_all()
+                    tf.summary.histogram('{}_out'.format(layer.name),
+                                         layer.output)
+        self.merged = tf.summary.merge_all()
 
         if self.write_graph:
-            if hasattr(tf, 'summary') and hasattr(tf.summary, 'FileWriter'):
-                self.writer = tf.summary.FileWriter(self.log_dir,
-                                                    self.sess.graph)
-            elif parse_version(tf.__version__) >= parse_version('0.8.0'):
-                self.writer = tf.train.SummaryWriter(self.log_dir,
-                                                     self.sess.graph)
-            else:
-                self.writer = tf.train.SummaryWriter(self.log_dir,
-                                                     self.sess.graph_def)
+            self.writer = tf.summary.FileWriter(self.log_dir,
+                                                self.sess.graph)
         else:
-            if hasattr(tf, 'summary') and hasattr(tf.summary, 'FileWriter'):
-                self.writer = tf.summary.FileWriter(self.log_dir)
-            else:
-                self.writer = tf.train.SummaryWriter(self.log_dir)
+            self.writer = tf.summary.FileWriter(self.log_dir)
 
     def on_epoch_end(self, epoch, logs=None):
         logs = logs or {}

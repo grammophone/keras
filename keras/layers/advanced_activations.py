@@ -7,6 +7,7 @@ from .. import constraints
 from ..engine import Layer
 from ..engine import InputSpec
 from .. import backend as K
+from ..legacy import interfaces
 
 
 class LeakyReLU(Layer):
@@ -78,6 +79,7 @@ class PReLU(Layer):
         - [Delving Deep into Rectifiers: Surpassing Human-Level Performance on ImageNet Classification](https://arxiv.org/abs/1502.01852)
     """
 
+    @interfaces.legacy_prelu_support
     def __init__(self, alpha_initializer='zeros',
                  alpha_regularizer=None,
                  alpha_constraint=None,
@@ -118,7 +120,11 @@ class PReLU(Layer):
 
     def call(self, inputs, mask=None):
         pos = K.relu(inputs)
-        neg = -self.alpha * K.relu(-inputs)
+        if K.backend() == 'theano':
+            neg = (K.pattern_broadcast(self.alpha, self.param_broadcast) *
+                   (inputs - K.abs(inputs)) * 0.5)
+        else:
+            neg = -self.alpha * K.relu(-inputs)
         return pos + neg
 
     def get_config(self):

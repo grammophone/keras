@@ -6,6 +6,7 @@ from .. import initializers
 from .. import regularizers
 from .. import constraints
 from .. import backend as K
+from ..legacy import interfaces
 
 
 class BatchNormalization(Layer):
@@ -51,6 +52,7 @@ class BatchNormalization(Layer):
         - [Batch Normalization: Accelerating Deep Network Training by Reducing Internal Covariate Shift](https://arxiv.org/abs/1502.03167)
     """
 
+    @interfaces.legacy_batchnorm_support
     def __init__(self,
                  axis=-1,
                  momentum=0.99,
@@ -93,14 +95,6 @@ class BatchNormalization(Layer):
                                     axes={self.axis: dim})
         shape = (dim,)
 
-        if self.center:
-            self.beta = self.add_weight(shape,
-                                        name='beta',
-                                        initializer=self.beta_initializer,
-                                        regularizer=self.beta_regularizer,
-                                        constraint=self.beta_constraint)
-        else:
-            self.beta = None
         if self.scale:
             self.gamma = self.add_weight(shape,
                                          name='gamma',
@@ -109,6 +103,14 @@ class BatchNormalization(Layer):
                                          constraint=self.gamma_constraint)
         else:
             self.gamma = None
+        if self.center:
+            self.beta = self.add_weight(shape,
+                                        name='beta',
+                                        initializer=self.beta_initializer,
+                                        regularizer=self.beta_regularizer,
+                                        constraint=self.beta_constraint)
+        else:
+            self.beta = None
         self.moving_mean = self.add_weight(
             shape,
             name='moving_mean',
@@ -148,7 +150,7 @@ class BatchNormalization(Layer):
                                                      self.momentum)],
                             inputs)
 
-            def normalize_in_training():
+            def normalize_inference():
                 if needs_broadcasting:
                     # In this case we must explictly broadcast all parameters.
                     broadcast_moving_mean = K.reshape(self.moving_mean,
@@ -182,7 +184,7 @@ class BatchNormalization(Layer):
 
         # Pick the normalized form corresponding to the training phase.
         return K.in_train_phase(normed,
-                                normalize_in_training,
+                                normalize_inference,
                                 training=training)
 
     def get_config(self):

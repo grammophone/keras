@@ -9,6 +9,7 @@ from .. import constraints
 from ..engine import Layer
 from ..engine import InputSpec
 from ..utils import conv_utils
+from ..legacy import interfaces
 
 # imports for backwards namespace compatibility
 from .pooling import AveragePooling1D
@@ -17,6 +18,9 @@ from .pooling import AveragePooling3D
 from .pooling import MaxPooling1D
 from .pooling import MaxPooling2D
 from .pooling import MaxPooling3D
+
+from ..legacy.layers import AtrousConvolution1D
+from ..legacy.layers import AtrousConvolution2D
 
 
 class _Conv(Layer):
@@ -146,7 +150,7 @@ class _Conv(Layer):
             outputs = K.conv1d(
                 inputs,
                 self.kernel,
-                stride=self.strides[0],
+                strides=self.strides[0],
                 padding=self.padding,
                 data_format=self.data_format,
                 dilation_rate=self.dilation_rate[0])
@@ -251,7 +255,11 @@ class Conv1D(_Conv):
             specifying the stride length of the convolution.
             Specifying any stride value != 1 is incompatible with specifying
             any `dilation_rate` value != 1.
-        padding: One of `"valid"` or `"same"` (case-insensitive).
+        padding: One of `"valid"`, `"causal"` or `"same"` (case-insensitive).
+            `"causal"` results in causal (dilated) convolutions, e.g. output[t]
+            depends solely on input[:t-1]. Useful when modeling temporal data
+            where the model should not violate the temporal order.
+            See [WaveNet: A Generative Model for Raw Audio, section 2.1](https://arxiv.org/abs/1609.03499).
         dilation_rate: an integer or tuple/list of a single integer, specifying
             the dilation rate to use for dilated convolution.
             Currently, specifying any `dilation_rate` value != 1 is
@@ -286,6 +294,7 @@ class Conv1D(_Conv):
         `steps` value might have changed due to padding or strides.
     """
 
+    @interfaces.legacy_conv1d_support
     def __init__(self, filters,
                  kernel_size,
                  strides=1,
@@ -409,6 +418,7 @@ class Conv2D(_Conv):
         `rows` and `cols` values might have changed due to padding.
     """
 
+    @interfaces.legacy_conv2d_support
     def __init__(self, filters,
                  kernel_size,
                  strides=(1, 1),
@@ -533,6 +543,7 @@ class Conv3D(_Conv):
         `new_conv_dim1`, `new_conv_dim2` and `new_conv_dim3` values might have changed due to padding.
     """
 
+    @interfaces.legacy_conv3d_support
     def __init__(self, filters,
                  kernel_size,
                  strides=(1, 1, 1),
@@ -661,6 +672,7 @@ class Conv2DTranspose(Conv2D):
         - [Deconvolutional Networks](http://www.matthewzeiler.com/pubs/cvpr2010/cvpr2010.pdf)
     """
 
+    @interfaces.legacy_deconv2d_support
     def __init__(self, filters,
                  kernel_size,
                  strides=(1, 1),
@@ -698,7 +710,7 @@ class Conv2DTranspose(Conv2D):
         if len(input_shape) != 4:
             raise ValueError('Inputs should have rank ' +
                              str(4) +
-                             'Received input shape:', str(input_shape))
+                             '; Received input shape:', str(input_shape))
         if self.data_format == 'channels_first':
             channel_axis = 1
         else:
@@ -730,9 +742,9 @@ class Conv2DTranspose(Conv2D):
         input_shape = K.shape(inputs)
         batch_size = input_shape[0]
         if self.data_format == 'channels_first':
-            c_axis, h_axis, w_axis = 1, 2, 3
+            h_axis, w_axis = 2, 3
         else:
-            c_axis, h_axis, w_axis = 3, 1, 2
+            h_axis, w_axis = 1, 2
 
         height, width = input_shape[h_axis], input_shape[w_axis]
         kernel_h, kernel_w = self.kernel_size
@@ -775,7 +787,6 @@ class Conv2DTranspose(Conv2D):
         else:
             c_axis, h_axis, w_axis = 3, 1, 2
 
-        height, width = input_shape[h_axis], input_shape[w_axis]
         kernel_h, kernel_w = self.kernel_size
         stride_h, stride_w = self.strides
 
@@ -879,6 +890,7 @@ class SeparableConv2D(Conv2D):
         `rows` and `cols` values might have changed due to padding.
     """
 
+    @interfaces.legacy_separable_conv2d_support
     def __init__(self, filters,
                  kernel_size,
                  strides=(1, 1),
@@ -1032,6 +1044,7 @@ class UpSampling1D(Layer):
         3D tensor with shape: `(batch, upsampled_steps, features)`.
     """
 
+    @interfaces.legacy_upsampling1d_support
     def __init__(self, size=2, **kwargs):
         super(UpSampling1D, self).__init__(**kwargs)
         self.size = int(size)
@@ -1086,6 +1099,7 @@ class UpSampling2D(Layer):
             `(batch, channels, upsampled_rows, upsampled_cols)`
     """
 
+    @interfaces.legacy_upsampling2d_support
     def __init__(self, size=(2, 2), data_format=None, **kwargs):
         super(UpSampling2D, self).__init__(**kwargs)
         self.data_format = conv_utils.normalize_data_format(data_format)
@@ -1094,18 +1108,18 @@ class UpSampling2D(Layer):
 
     def compute_output_shape(self, input_shape):
         if self.data_format == 'channels_first':
-            width = self.size[0] * input_shape[2] if input_shape[2] is not None else None
-            height = self.size[1] * input_shape[3] if input_shape[3] is not None else None
+            height = self.size[0] * input_shape[2] if input_shape[2] is not None else None
+            width = self.size[1] * input_shape[3] if input_shape[3] is not None else None
             return (input_shape[0],
                     input_shape[1],
-                    width,
-                    height)
-        elif self.data_format == 'channels_last':
-            width = self.size[0] * input_shape[1] if input_shape[1] is not None else None
-            height = self.size[1] * input_shape[2] if input_shape[2] is not None else None
-            return (input_shape[0],
-                    width,
                     height,
+                    width)
+        elif self.data_format == 'channels_last':
+            height = self.size[0] * input_shape[1] if input_shape[1] is not None else None
+            width = self.size[1] * input_shape[2] if input_shape[2] is not None else None
+            return (input_shape[0],
+                    height,
+                    width,
                     input_shape[3])
 
     def call(self, inputs):
@@ -1154,6 +1168,7 @@ class UpSampling3D(Layer):
             `(batch, channels, upsampled_dim1, upsampled_dim2, upsampled_dim3)`
     """
 
+    @interfaces.legacy_upsampling3d_support
     def __init__(self, size=(2, 2, 2), data_format=None, **kwargs):
         self.data_format = conv_utils.normalize_data_format(data_format)
         self.size = conv_utils.normalize_tuple(size, 3, 'size')
@@ -1179,8 +1194,6 @@ class UpSampling3D(Layer):
                     dim2,
                     dim3,
                     input_shape[4])
-        else:
-            raise ValueError('Invalid data_format:', self.data_format)
 
     def call(self, inputs):
         return K.resize_volumes(inputs,
@@ -1216,20 +1229,16 @@ class ZeroPadding1D(Layer):
     def __init__(self, padding=1, **kwargs):
         super(ZeroPadding1D, self).__init__(**kwargs)
         self.padding = conv_utils.normalize_tuple(padding, 2, 'padding')
-        self.left_pad = self.padding[0]
-        self.right_pad = self.padding[1]
         self.input_spec = InputSpec(ndim=3)
 
     def compute_output_shape(self, input_shape):
-        length = input_shape[1] + self.left_pad + self.right_pad if input_shape[1] is not None else None
+        length = input_shape[1] + self.padding[0] + self.padding[1] if input_shape[1] is not None else None
         return (input_shape[0],
                 length,
                 input_shape[2])
 
     def call(self, inputs):
-        return K.asymmetric_temporal_padding(inputs,
-                                             left_pad=self.left_pad,
-                                             right_pad=self.right_pad)
+        return K.temporal_padding(inputs, padding=self.padding)
 
     def get_config(self):
         config = {'padding': self.padding}
@@ -1280,6 +1289,7 @@ class ZeroPadding2D(Layer):
             `(batch, channels, padded_rows, padded_cols)`
     """
 
+    @interfaces.legacy_zeropadding2d_support
     def __init__(self,
                  padding=(1, 1),
                  data_format=None,
@@ -1321,16 +1331,11 @@ class ZeroPadding2D(Layer):
                     rows,
                     cols,
                     input_shape[3])
-        else:
-            raise ValueError('Invalid data_format:', self.data_format)
 
     def call(self, inputs):
-        return K.asymmetric_spatial_2d_padding(inputs,
-                                               top_pad=self.padding[0][0],
-                                               bottom_pad=self.padding[0][1],
-                                               left_pad=self.padding[1][0],
-                                               right_pad=self.padding[1][1],
-                                               data_format=self.data_format)
+        return K.spatial_2d_padding(inputs,
+                                    padding=self.padding,
+                                    data_format=self.data_format)
 
     def get_config(self):
         config = {'padding': self.padding,
@@ -1379,6 +1384,7 @@ class ZeroPadding3D(Layer):
             `(batch, depth, first_padded_axis, second_padded_axis, third_axis_to_pad)`
     """
 
+    @interfaces.legacy_zeropadding3d_support
     def __init__(self, padding=(1, 1, 1), data_format=None, **kwargs):
         super(ZeroPadding3D, self).__init__(**kwargs)
         self.data_format = conv_utils.normalize_data_format(data_format)
@@ -1425,8 +1431,6 @@ class ZeroPadding3D(Layer):
                     dim2,
                     dim3,
                     input_shape[4])
-        else:
-            raise ValueError('Invalid data_format:', self.data_format)
 
     def call(self, inputs):
         return K.spatial_3d_padding(inputs,
@@ -1540,6 +1544,7 @@ class Cropping2D(Layer):
     ```
     """
 
+    @interfaces.legacy_cropping2d_support
     def __init__(self, cropping=((0, 0), (0, 0)),
                  data_format=None, **kwargs):
         super(Cropping2D, self).__init__(**kwargs)
@@ -1577,8 +1582,6 @@ class Cropping2D(Layer):
                     input_shape[1] - self.cropping[0][0] - self.cropping[0][1] if input_shape[1] else None,
                     input_shape[2] - self.cropping[1][0] - self.cropping[1][1] if input_shape[2] else None,
                     input_shape[3])
-        else:
-            raise ValueError('Invalid data_format:', self.data_format)
 
     def call(self, inputs):
         if self.data_format == 'channels_first':
@@ -1669,6 +1672,7 @@ class Cropping3D(Layer):
             `(batch, depth, first_cropped_axis, second_cropped_axis, third_cropped_axis)`
     """
 
+    @interfaces.legacy_cropping3d_support
     def __init__(self, cropping=((1, 1), (1, 1), (1, 1)),
                  data_format=None, **kwargs):
         super(Cropping3D, self).__init__(**kwargs)
@@ -1718,8 +1722,6 @@ class Cropping3D(Layer):
                     dim2,
                     dim3,
                     input_shape[4])
-        else:
-            raise ValueError('Invalid data_format:', self.data_format)
 
     def call(self, inputs):
         if self.data_format == 'channels_first':
@@ -1791,11 +1793,11 @@ class Cropping3D(Layer):
                               self.cropping[2][0]:,
                               :]
             elif self.cropping[0][1] == self.cropping[2][1] == 0:
-                return x[:,
-                         self.cropping[0][0]:,
-                         self.cropping[1][0]:-self.cropping[1][1],
-                         self.cropping[2][0]:,
-                         :]
+                return inputs[:,
+                              self.cropping[0][0]:,
+                              self.cropping[1][0]:-self.cropping[1][1],
+                              self.cropping[2][0]:,
+                              :]
             elif self.cropping[0][1] == 0:
                 return inputs[:,
                               self.cropping[0][0]:,
@@ -1835,3 +1837,7 @@ Convolution3D = Conv3D
 SeparableConvolution2D = SeparableConv2D
 Convolution2DTranspose = Conv2DTranspose
 Deconvolution2D = Deconv2D = Conv2DTranspose
+
+# Legacy aliases
+AtrousConv1D = AtrousConvolution1D
+AtrousConv2D = AtrousConvolution2D

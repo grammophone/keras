@@ -14,25 +14,32 @@ import warnings
 
 from ..layers import Input
 from .. import layers
-from ..layers import Dense, Activation, Flatten
-from ..layers import Conv2D, MaxPooling2D, ZeroPadding2D, AveragePooling2D, GlobalAveragePooling2D, GlobalMaxPooling2D
+from ..layers import Dense
+from ..layers import Activation
+from ..layers import Flatten
+from ..layers import Conv2D
+from ..layers import MaxPooling2D
+from ..layers import ZeroPadding2D
+from ..layers import AveragePooling2D
+from ..layers import GlobalAveragePooling2D
+from ..layers import GlobalMaxPooling2D
 from ..layers import BatchNormalization
 from ..models import Model
 from .. import backend as K
 from ..engine.topology import get_source_inputs
-from ..utils.layer_utils import convert_all_kernels_in_model
+from ..utils import layer_utils
 from ..utils.data_utils import get_file
-from .imagenet_utils import decode_predictions, preprocess_input, _obtain_input_shape
+from .imagenet_utils import decode_predictions
+from .imagenet_utils import preprocess_input
+from .imagenet_utils import _obtain_input_shape
 
 
-TH_WEIGHTS_PATH = 'https://github.com/fchollet/deep-learning-models/releases/download/v0.2/resnet50_weights_th_dim_ordering_th_kernels.h5'
-TF_WEIGHTS_PATH = 'https://github.com/fchollet/deep-learning-models/releases/download/v0.2/resnet50_weights_tf_dim_ordering_tf_kernels.h5'
-TH_WEIGHTS_PATH_NO_TOP = 'https://github.com/fchollet/deep-learning-models/releases/download/v0.2/resnet50_weights_th_dim_ordering_th_kernels_notop.h5'
-TF_WEIGHTS_PATH_NO_TOP = 'https://github.com/fchollet/deep-learning-models/releases/download/v0.2/resnet50_weights_tf_dim_ordering_tf_kernels_notop.h5'
+WEIGHTS_PATH = 'https://github.com/fchollet/deep-learning-models/releases/download/v0.2/resnet50_weights_tf_dim_ordering_tf_kernels.h5'
+WEIGHTS_PATH_NO_TOP = 'https://github.com/fchollet/deep-learning-models/releases/download/v0.2/resnet50_weights_tf_dim_ordering_tf_kernels_notop.h5'
 
 
 def identity_block(input_tensor, kernel_size, filters, stage, block):
-    """The identity_block is the block that has no conv layer at shortcut
+    """The identity block is the block that has no conv layer at shortcut.
 
     # Arguments
         input_tensor: input tensor
@@ -40,6 +47,9 @@ def identity_block(input_tensor, kernel_size, filters, stage, block):
         filters: list of integers, the filterss of 3 conv layer at main path
         stage: integer, current stage label, used for generating layer names
         block: 'a','b'..., current block label, used for generating layer names
+
+    # Returns
+        Output tensor for the block.
     """
     filters1, filters2, filters3 = filters
     if K.image_data_format() == 'channels_last':
@@ -53,15 +63,15 @@ def identity_block(input_tensor, kernel_size, filters, stage, block):
     x = BatchNormalization(axis=bn_axis, name=bn_name_base + '2a')(x)
     x = Activation('relu')(x)
 
-    x = Conv2D(filters2, kernel_size, kernel_size,
-               pading='same', name=conv_name_base + '2b')(x)
+    x = Conv2D(filters2, kernel_size,
+               padding='same', name=conv_name_base + '2b')(x)
     x = BatchNormalization(axis=bn_axis, name=bn_name_base + '2b')(x)
     x = Activation('relu')(x)
 
     x = Conv2D(filters3, (1, 1), name=conv_name_base + '2c')(x)
     x = BatchNormalization(axis=bn_axis, name=bn_name_base + '2c')(x)
 
-    x = layers.sum([x, input_tensor])
+    x = layers.add([x, input_tensor])
     x = Activation('relu')(x)
     return x
 
@@ -75,6 +85,9 @@ def conv_block(input_tensor, kernel_size, filters, stage, block, strides=(2, 2))
         filters: list of integers, the filterss of 3 conv layer at main path
         stage: integer, current stage label, used for generating layer names
         block: 'a','b'..., current block label, used for generating layer names
+
+    # Returns
+        Output tensor for the block.
 
     Note that from stage 3, the first conv layer at main path is with strides=(2,2)
     And the shortcut should have strides=(2,2) as well
@@ -92,7 +105,7 @@ def conv_block(input_tensor, kernel_size, filters, stage, block, strides=(2, 2))
     x = BatchNormalization(axis=bn_axis, name=bn_name_base + '2a')(x)
     x = Activation('relu')(x)
 
-    x = Conv2D(filters2, (kernel_size, kernel_size), pading='same',
+    x = Conv2D(filters2, kernel_size, padding='same',
                name=conv_name_base + '2b')(x)
     x = BatchNormalization(axis=bn_axis, name=bn_name_base + '2b')(x)
     x = Activation('relu')(x)
@@ -104,7 +117,7 @@ def conv_block(input_tensor, kernel_size, filters, stage, block, strides=(2, 2))
                       name=conv_name_base + '1')(input_tensor)
     shortcut = BatchNormalization(axis=bn_axis, name=bn_name_base + '1')(shortcut)
 
-    x = layers.sum([x, shortcut])
+    x = layers.add([x, shortcut])
     x = Activation('relu')(x)
     return x
 
@@ -113,8 +126,9 @@ def ResNet50(include_top=True, weights='imagenet',
              input_tensor=None, input_shape=None,
              pooling=None,
              classes=1000):
-    """Instantiate the ResNet50 architecture,
-    optionally loading weights pre-trained
+    """Instantiates the ResNet50 architecture.
+
+    Optionally loads weights pre-trained
     on ImageNet. Note that when using TensorFlow,
     for best performance you should set
     `image_data_format="channels_last"` in your Keras config
@@ -156,6 +170,10 @@ def ResNet50(include_top=True, weights='imagenet',
 
     # Returns
         A Keras model instance.
+
+    # Raises
+        ValueError: in case of invalid argument for `weights`,
+            or invalid input shape.
     """
     if weights not in {'imagenet', None}:
         raise ValueError('The `weights` argument should be either '
@@ -233,18 +251,27 @@ def ResNet50(include_top=True, weights='imagenet',
 
     # load weights
     if weights == 'imagenet':
+        if include_top:
+            weights_path = get_file('resnet50_weights_tf_dim_ordering_tf_kernels.h5',
+                                    WEIGHTS_PATH,
+                                    cache_subdir='models',
+                                    md5_hash='a7b3fe01876f51b976af0dea6bc144eb')
+        else:
+            weights_path = get_file('resnet50_weights_tf_dim_ordering_tf_kernels_notop.h5',
+                                    WEIGHTS_PATH_NO_TOP,
+                                    cache_subdir='models',
+                                    md5_hash='a268eb855778b3df3c7506639542a6af')
+        model.load_weights(weights_path)
+        if K.backend() == 'theano':
+            layer_utils.convert_all_kernels_in_model(model)
+
         if K.image_data_format() == 'channels_first':
             if include_top:
-                weights_path = get_file('resnet50_weights_th_dim_ordering_th_kernels.h5',
-                                        TH_WEIGHTS_PATH,
-                                        cache_subdir='models',
-                                        md5_hash='1c1f8f5b0c8ee28fe9d950625a230e1c')
-            else:
-                weights_path = get_file('resnet50_weights_th_dim_ordering_th_kernels_notop.h5',
-                                        TH_WEIGHTS_PATH_NO_TOP,
-                                        cache_subdir='models',
-                                        md5_hash='f64f049c92468c9affcd44b0976cdafe')
-            model.load_weights(weights_path)
+                maxpool = model.get_layer(name='avg_pool')
+                shape = maxpool.output_shape[1:]
+                dense = model.get_layer(name='fc1000')
+                layer_utils.convert_dense_weights_data_format(dense, shape, 'channels_first')
+
             if K.backend() == 'tensorflow':
                 warnings.warn('You are using the TensorFlow backend, yet you '
                               'are using the Theano '
@@ -254,19 +281,4 @@ def ResNet50(include_top=True, weights='imagenet',
                               '`image_data_format="channels_last"` in '
                               'your Keras config '
                               'at ~/.keras/keras.json.')
-                convert_all_kernels_in_model(model)
-        else:
-            if include_top:
-                weights_path = get_file('resnet50_weights_tf_dim_ordering_tf_kernels.h5',
-                                        TF_WEIGHTS_PATH,
-                                        cache_subdir='models',
-                                        md5_hash='a7b3fe01876f51b976af0dea6bc144eb')
-            else:
-                weights_path = get_file('resnet50_weights_tf_dim_ordering_tf_kernels_notop.h5',
-                                        TF_WEIGHTS_PATH_NO_TOP,
-                                        cache_subdir='models',
-                                        md5_hash='a268eb855778b3df3c7506639542a6af')
-            model.load_weights(weights_path)
-            if K.backend() == 'theano':
-                convert_all_kernels_in_model(model)
     return model

@@ -11,7 +11,7 @@ import numpy as np
 
 from . import backend as K
 from . import optimizers
-from . import layers
+from . import layers as layer_module
 from .utils.io_utils import ask_to_proceed_with_overwrite
 from .engine.training import Model
 from .engine import topology
@@ -19,6 +19,7 @@ from .engine.topology import Layer
 from .engine.topology import Input
 from .legacy import layers as legacy_layers
 from .legacy import models as legacy_models
+from .legacy import interfaces
 
 try:
     import h5py
@@ -27,11 +28,43 @@ except ImportError:
 
 
 def save_model(model, filepath, overwrite=True):
+    """Save a model to a HDF5 file.
+
+    The saved model contains:
+        - the model's configuration (topology)
+        - the model's weights
+        - the model's optimizer's state (if any)
+
+    Thus the saved model can be reinstantiated in
+    the exact same state, without any of the code
+    used for model definition or training.
+
+    # Arguments
+        model: Keras model instance to be saved.
+        filepath: String, path where to save the model.
+        overwrite: Whether we should overwrite any existing
+            model at the target location, or instead
+            ask the user with a manual prompt.
+
+    # Raises
+        ImportError: if h5py is not available.
+    """
 
     if h5py is None:
         raise ImportError('`save_model` requires h5py.')
 
     def get_json_type(obj):
+        """Serialize any object to a JSON-serializable structure.
+
+        # Arguments
+            obj: the object to serialize
+
+        # Returns
+            JSON-serializable structure representing `obj`.
+
+        # Raises
+            TypeError: if `obj` cannot be serialized.
+        """
         # if obj is a serializable Keras class instance
         # e.g. optimizer, layer
         if hasattr(obj, 'get_config'):
@@ -52,9 +85,9 @@ def save_model(model, filepath, overwrite=True):
 
         raise TypeError('Not JSON Serializable:', obj)
 
-    from keras import __version__ as keras_version
+    from . import __version__ as keras_version
 
-    # if file exists and should not be overwritten
+    # If file exists and should not be overwritten.
     if not overwrite and os.path.isfile(filepath):
         proceed = ask_to_proceed_with_overwrite(filepath)
         if not proceed:
@@ -62,6 +95,7 @@ def save_model(model, filepath, overwrite=True):
 
     f = h5py.File(filepath, 'w')
     f.attrs['keras_version'] = str(keras_version).encode('utf8')
+    f.attrs['backend'] = K.backend().encode('utf8')
     f.attrs['model_config'] = json.dumps({
         'class_name': model.__class__.__name__,
         'config': model.get_config()
@@ -98,17 +132,24 @@ def save_model(model, filepath, overwrite=True):
                 'loss_weights': model.loss_weights,
             }, default=get_json_type).encode('utf8')
 
-            # save optimizer weights
+            # Save optimizer weights.
             symbolic_weights = getattr(model.optimizer, 'weights')
             if symbolic_weights:
                 optimizer_weights_group = f.create_group('optimizer_weights')
                 weight_values = K.batch_get_value(symbolic_weights)
                 weight_names = []
                 for i, (w, val) in enumerate(zip(symbolic_weights, weight_values)):
-                    if hasattr(w, 'name') and w.name:
-                        name = str(w.name)
+                    # Default values of symbolic_weights is /variable for theano
+                    if K.backend() == 'theano':
+                        if hasattr(w, 'name') and w.name != "/variable":
+                            name = str(w.name)
+                        else:
+                            name = 'param_' + str(i)
                     else:
-                        name = 'param_' + str(i)
+                        if hasattr(w, 'name') and w.name:
+                            name = str(w.name)
+                        else:
+                            name = 'param_' + str(i)
                     weight_names.append(name.encode('utf8'))
                 optimizer_weights_group.attrs['weight_names'] = weight_names
                 for name, val in zip(weight_names, weight_values):
@@ -126,13 +167,41 @@ def save_model(model, filepath, overwrite=True):
 
 
 def load_model(filepath, custom_objects=None):
+    """Loads a model saved via `save_model`.
+
+    # Arguments
+        filepath: String, path to the saved model.
+        custom_objects: Optional dictionary mapping names
+            (strings) to custom classes or functions to be
+            considered during deserialization.
+
+    # Returns
+        A Keras model instance. If an optimizer was found
+        as part of the saved model, the model is already
+        compiled. Otherwise, the model is uncompiled and
+        a warning will be displayed.
+
+    # Raises
+        ImportError: if h5py is not available.
+        ValueError: In case of an invalid savefile.
+    """
     if h5py is None:
         raise ImportError('`save_model` requires h5py.')
 
     if not custom_objects:
         custom_objects = {}
 
-    def deserialize(obj):
+    def convert_custom_objects(obj):
+        """Handles custom object lookup.
+
+        # Arguments
+            obj: object, dict, or list.
+
+        # Returns
+            The same structure, where occurences
+                of a custom object name have been replaced
+                with the custom object.
+        """
         if isinstance(obj, list):
             deserialized = []
             for value in obj:
@@ -177,22 +246,22 @@ def load_model(filepath, custom_objects=None):
     optimizer = optimizers.deserialize(optimizer_config,
                                        custom_objects=custom_objects)
 
-    # recover loss functions and metrics
-    loss = deserialize(training_config['loss'])
-    metrics = deserialize(training_config['metrics'])
+    # Recover loss functions and metrics.
+    loss = convert_custom_objects(training_config['loss'])
+    metrics = convert_custom_objects(training_config['metrics'])
     sample_weight_mode = training_config['sample_weight_mode']
     loss_weights = training_config['loss_weights']
 
-    # compile model
+    # Compile model.
     model.compile(optimizer=optimizer,
                   loss=loss,
                   metrics=metrics,
                   loss_weights=loss_weights,
                   sample_weight_mode=sample_weight_mode)
 
-    # set optimizer weights
+    # Set optimizer weights.
     if 'optimizer_weights' in f:
-        # build train function (to get weight updates)
+        # Build train function (to get weight updates).
         if isinstance(model, Sequential):
             model.model._make_train_function()
         else:
@@ -206,27 +275,54 @@ def load_model(filepath, custom_objects=None):
 
 
 def model_from_config(config, custom_objects=None):
+    """Instantiates a Keras model from its config.
+
+    # Arguments
+        config: Configuration dictionary.
+        custom_objects: Optional dictionary mapping names
+            (strings) to custom classes or functions to be
+            considered during deserialization.
+
+    # Returns
+        A Keras model instance (uncompiled).
+    """
     if isinstance(config, list):
         raise TypeError('`model_fom_config` expects a dictionary, not a list. '
                         'Maybe you meant to use '
                         '`Sequential.from_config(config)`?')
-    return layers.deserialize(config, custom_objects=custom_objects)
+    return layer_module.deserialize(config, custom_objects=custom_objects)
 
 
 def model_from_yaml(yaml_string, custom_objects=None):
-    """Parses a yaml model configuration file
-    and returns a model instance.
+    """Parses a yaml model configuration file and returns a model instance.
+
+    # Arguments
+        yaml_string: YAML string encoding a model configuration.
+        custom_objects: Optional dictionary mapping names
+            (strings) to custom classes or functions to be
+            considered during deserialization.
+
+    # Returns
+        A Keras model instance (uncompiled).
     """
     config = yaml.load(yaml_string)
-    return layers.deserialize(config, custom_objects=custom_objects)
+    return layer_module.deserialize(config, custom_objects=custom_objects)
 
 
 def model_from_json(json_string, custom_objects=None):
-    """Parses a JSON model configuration file
-    and returns a model instance.
+    """Parses a JSON model configuration file and returns a model instance.
+
+    # Arguments
+        json_string: JSON string encoding a model configuration.
+        custom_objects: Optional dictionary mapping names
+            (strings) to custom classes or functions to be
+            considered during deserialization.
+
+    # Returns
+        A Keras model instance (uncompiled).
     """
     config = json.loads(json_string)
-    return layers.deserialize(config, custom_objects=custom_objects)
+    return layer_module.deserialize(config, custom_objects=custom_objects)
 
 
 class Sequential(Model):
@@ -267,23 +363,25 @@ class Sequential(Model):
     """
 
     def __init__(self, layers=None, name=None):
-        self.layers = []  # stack of layers
-        self.model = None  # internal Model instance
-        self.inputs = []  # tensors
-        self.outputs = []  # tensors (length 1)
+        self.layers = []  # Stack of layers.
+        self.model = None  # Internal Model instance.
+        self.inputs = []  # List of input tensors
+        self.outputs = []  # List of length 1: the output tensor (unique).
         self._trainable = True
         self._initial_weights = None
 
-        # model attributes
+        # Model attributes.
         self.inbound_nodes = []
         self.outbound_nodes = []
         self.built = False
 
+        # Set model name.
         if not name:
             prefix = 'sequential_'
             name = prefix + str(K.get_uid(prefix))
         self.name = name
 
+        # Add to the model any layers passed to the constructor.
         if layers:
             for layer in layers:
                 self.add(layer)
@@ -293,6 +391,14 @@ class Sequential(Model):
 
         # Arguments
             layer: layer instance.
+
+        # Raises
+            TypeError: If `layer` is not a layer instance.
+            ValueError: In case the `layer` argument does not
+                know its input shape.
+            ValueError: In case the `layer` argument has
+                multiple output tensors, or is already connected
+                somewhere else (forbidden in `Sequential` models).
         """
         if not isinstance(layer, Layer):
             raise TypeError('The added layer must be '
@@ -300,7 +406,7 @@ class Sequential(Model):
                             'Found: ' + str(layer))
         if not self.outputs:
             # first layer in model: check that it is an input layer
-            if len(layer.inbound_nodes) == 0:
+            if not layer.inbound_nodes:
                 # create an input layer
                 if not hasattr(layer, 'batch_input_shape'):
                     raise ValueError('The first layer in a '
@@ -362,6 +468,9 @@ class Sequential(Model):
 
     def pop(self):
         """Removes the last layer in the model.
+
+        # Raises
+            TypeError: if there are no layers in the model.
         """
         if not self.layers:
             raise TypeError('There are no layers in the model.')
@@ -380,7 +489,9 @@ class Sequential(Model):
         self.built = False
 
     def get_layer(self, name=None, index=None):
-        """Returns a layer based on either its name (unique)
+        """Retrieve a layer that is part of the model.
+
+        Returns a layer based on either its name (unique)
         or its index in the graph. Indices are based on
         order of horizontal graph traversal (bottom-up).
 
@@ -395,10 +506,10 @@ class Sequential(Model):
             self.build()
         return self.model.get_layer(name, index)
 
-    def call(self, x, mask=None):
+    def call(self, inputs, mask=None):
         if self.model is None:
             self.build()
-        return self.model.call(x, mask)
+        return self.model.call(inputs, mask)
 
     def build(self, input_shape=None):
         if not self.inputs or not self.outputs:
@@ -424,8 +535,11 @@ class Sequential(Model):
         self.container_nodes = self.model.container_nodes
         self.output_names = self.model.output_names
         self.input_names = self.model.input_names
+        self._feed_input_names = self.model._feed_input_names
+        self._feed_inputs = self.model._feed_inputs
 
-        # make sure child model callbacks will call the parent Sequential model:
+        # Make sure child model callbacks
+        # will call the parent Sequential model.
         self.model.callback_model = self
 
         self.built = True
@@ -536,8 +650,11 @@ class Sequential(Model):
         return self.model.constraints
 
     def get_weights(self):
-        """Returns the weights of the model,
-        as a flat list of Numpy arrays.
+        """Retrieves the weights of the model.
+
+        # Returns
+            A flat list of Numpy arrays
+            (one array per model weight).
         """
         # Legacy support
         if legacy_models.needs_legacy_support(self):
@@ -553,9 +670,11 @@ class Sequential(Model):
 
     def set_weights(self, weights):
         """Sets the weights of the model.
-        The `weights` argument should be a list
-        of Numpy arrays with shapes and types matching
-        the output of `model.get_weights()`.
+
+        # Arguments
+            weights: Should be a list
+                of Numpy arrays with shapes and types matching
+                the output of `model.get_weights()`.
         """
         # Legacy support
         if legacy_models.needs_legacy_support(self):
@@ -625,7 +744,7 @@ class Sequential(Model):
             sample_weight_mode: if you need to do timestep-wise
                 sample weighting (2D weights), set this to "temporal".
                 "None" defaults to sample-wise weights (1D).
-            kwargs: for Theano backend, these are passed into K.function.
+            **kwargs: for Theano backend, these are passed into K.function.
                 Ignored for Tensorflow backend.
 
         # Example
@@ -655,7 +774,7 @@ class Sequential(Model):
 
     def fit(self, x, y, batch_size=32, epochs=10, verbose=1, callbacks=None,
             validation_split=0., validation_data=None, shuffle=True,
-            class_weight=None, sample_weight=None, initial_epoch=0):
+            class_weight=None, sample_weight=None, initial_epoch=0, **kwargs):
         """Trains the model for a fixed number of epochs.
 
         # Arguments
@@ -698,7 +817,18 @@ class Sequential(Model):
             a record of training loss values and metrics values
             at successive epochs, as well as validation loss values
             and validation metrics values (if applicable).
+
+        # Raises
+            RuntimeError: if the model was never compiled.
         """
+        # Legacy support
+        if 'nb_epoch' in kwargs:
+            warnings.warn('The `nb_epoch` argument in `fit` '
+                          'has been renamed `epochs`.')
+            epochs = kwargs.pop('nb_epoch')
+        if kwargs:
+            raise TypeError('Unrecognized keyword arguments: ' + str(kwargs))
+
         if self.model is None:
             raise RuntimeError('The model needs to be compiled '
                                'before being used.')
@@ -731,6 +861,9 @@ class Sequential(Model):
             or list of scalars (if the model computes other metrics).
             The attribute `model.metrics_names` will give you
             the display labels for the scalar outputs.
+
+        # Raises
+            RuntimeError: if the model was never compiled.
         """
         if self.model is None:
             raise RuntimeError('The model needs to be compiled '
@@ -741,8 +874,9 @@ class Sequential(Model):
                                    sample_weight=sample_weight)
 
     def predict(self, x, batch_size=32, verbose=0):
-        """Generates output predictions for the input samples,
-        processing the samples in a batched way.
+        """Generates output predictions for the input samples.
+
+        The input samples are processed batch by batch.
 
         # Arguments
             x: the input data, as a Numpy array.
@@ -758,6 +892,13 @@ class Sequential(Model):
 
     def predict_on_batch(self, x):
         """Returns predictions for a single batch of samples.
+
+        # Arguments
+            x: input data, as a Numpy array or list of Numpy arrays
+                (if the model has multiple inputs).
+
+        # Returns
+            A Numpy array of predictions.
         """
         if self.model is None:
             self.build()
@@ -780,6 +921,9 @@ class Sequential(Model):
             or list of scalars (if the model computes other metrics).
             The attribute `model.metrics_names` will give you
             the display labels for the scalar outputs.
+
+        # Raises
+            RuntimeError: if the model was never compiled.
         """
         if self.model is None:
             raise RuntimeError('The model needs to be compiled '
@@ -803,6 +947,9 @@ class Sequential(Model):
             or list of scalars (if the model computes other metrics).
             The attribute `model.metrics_names` will give you
             the display labels for the scalar outputs.
+
+        # Raises
+            RuntimeError: if the model was never compiled.
         """
         if self.model is None:
             raise RuntimeError('The model needs to be compiled '
@@ -811,8 +958,9 @@ class Sequential(Model):
                                         sample_weight=sample_weight)
 
     def predict_proba(self, x, batch_size=32, verbose=1):
-        """Generates class probability predictions for the input samples
-        batch by batch.
+        """Generates class probability predictions for the input samples.
+
+        The input samples are processed batch by batch.
 
         # Arguments
             x: input data, as a Numpy array or list of Numpy arrays
@@ -832,8 +980,9 @@ class Sequential(Model):
         return preds
 
     def predict_classes(self, x, batch_size=32, verbose=1):
-        """Generate class predictions for the input samples
-        batch by batch.
+        """Generate class predictions for the input samples.
+
+        The input samples are processed batch by batch.
 
         # Arguments
             x: input data, as a Numpy array or list of Numpy arrays
@@ -850,19 +999,27 @@ class Sequential(Model):
         else:
             return (proba > 0.5).astype('int32')
 
-    def fit_generator(self, generator, samples_per_epoch, epochs,
-                      verbose=1, callbacks=None,
-                      validation_data=None, num_val_samples=None,
-                      class_weight=None, max_q_size=10, workers=1,
-                      pickle_safe=False, initial_epoch=0):
-        """Fits the model on data generated batch-by-batch by
-        a Python generator.
+    @interfaces.legacy_generator_methods_support
+    def fit_generator(self, generator,
+                      steps_per_epoch,
+                      epochs=1,
+                      verbose=1,
+                      callbacks=None,
+                      validation_data=None,
+                      validation_steps=None,
+                      class_weight=None,
+                      max_q_size=10,
+                      workers=1,
+                      pickle_safe=False,
+                      initial_epoch=0):
+        """Fits the model on data generated batch-by-batch by a Python generator.
+
         The generator is run in parallel to the model, for efficiency.
         For instance, this allows you to do real-time data augmentation
         on images on CPU in parallel to training your model on GPU.
 
         # Arguments
-            generator: a generator.
+            generator: A generator.
                 The output of the generator must be either
                 - a tuple (inputs, targets)
                 - a tuple (inputs, targets, sample_weights).
@@ -870,31 +1027,41 @@ class Sequential(Model):
                 The generator is expected to loop over its data
                 indefinitely. An epoch finishes when `samples_per_epoch`
                 samples have been seen by the model.
-            samples_per_epoch: integer, number of samples to process before
-                going to the next epoch.
-            epochs: integer, total number of iterations on the data.
-            verbose: verbosity mode, 0, 1, or 2.
-            callbacks: list of callbacks to be called during training.
-            validation_data: this can be either
-                - a generator for the validation data
-                - a tuple (inputs, targets)
-                - a tuple (inputs, targets, sample_weights).
-            num_val_samples: only relevant if `validation_data` is a generator.
-                number of samples to use from validation generator
+            steps_per_epoch: Total number of steps (batches of samples)
+                to yield from `generator` before declaring one epoch
+                finished and starting the next epoch. It should typically
+                be equal to the number of unique samples if your dataset
+                divided by the batch size.
+            epochs: Integer, total number of iterations on the data.
+            verbose: Verbosity mode, 0, 1, or 2.
+            callbacks: List of callbacks to be called during training.
+            validation_data: This can be either
+                - A generator for the validation data
+                - A tuple (inputs, targets)
+                - A tuple (inputs, targets, sample_weights).
+            validation_steps: Only relevant if `validation_data`
+                is a generator.
+                Number of samples to use from validation generator
                 at the end of every epoch.
-            class_weight: dictionary mapping class indices to a weight
+            class_weight: Dictionary mapping class indices to a weight
                 for the class.
-            max_q_size: maximum size for the generator queue
-            workers: maximum number of processes to spin up
-            pickle_safe: if True, use process based threading. Note that because
-                this implementation relies on multiprocessing, you should not pass
-                non picklable arguments to the generator as they can't be passed
+            max_q_size: Maximum size for the generator queue
+            workers: Maximum number of processes to spin up
+            pickle_safe: Ff True, use process based threading.
+                Note that because
+                this implementation relies on multiprocessing,
+                you should not pass
+                non picklable arguments to the generator
+                as they can't be passed
                 easily to children processes.
-            initial_epoch: epoch at which to start training
+            initial_epoch: Epoch at which to start training
                 (useful for resuming a previous training run)
 
         # Returns
             A `History` object.
+
+        # Raises
+            RuntimeError: if the model was never compiled.
 
         # Example
 
@@ -917,77 +1084,89 @@ class Sequential(Model):
             raise RuntimeError('The model needs to be compiled '
                                'before being used.')
         return self.model.fit_generator(generator,
-                                        samples_per_epoch,
+                                        steps_per_epoch,
                                         epochs,
                                         verbose=verbose,
                                         callbacks=callbacks,
                                         validation_data=validation_data,
-                                        num_val_samples=num_val_samples,
+                                        validation_steps=validation_steps,
                                         class_weight=class_weight,
                                         max_q_size=max_q_size,
                                         workers=workers,
                                         pickle_safe=pickle_safe,
                                         initial_epoch=initial_epoch)
 
-    def evaluate_generator(self, generator, val_samples,
+    @interfaces.legacy_generator_methods_support
+    def evaluate_generator(self, generator, steps,
                            max_q_size=10, workers=1,
                            pickle_safe=False):
-        """Evaluates the model on a data generator. The generator should
-        return the same kind of data as accepted by `test_on_batch`.
+        """Evaluates the model on a data generator.
+
+        The generator should return the same kind of data
+        as accepted by `test_on_batch`.
 
         # Arguments
-            generator:
-                generator yielding tuples (inputs, targets)
+            generator: Generator yielding tuples (inputs, targets)
                 or (inputs, targets, sample_weights)
-            val_samples:
-                total number of samples to generate from `generator`
-                before returning.
+            steps: Total number of steps (batches of samples)
+                to yield from `generator` before stopping.
             max_q_size: maximum size for the generator queue
             workers: maximum number of processes to spin up
-            pickle_safe: if True, use process based threading. Note that because
-                this implementation relies on multiprocessing, you should not pass non
-                non picklable arguments to the generator as they can't be passed
-                easily to children processes.
+            pickle_safe: if True, use process based threading.
+                Note that because this implementation
+                relies on multiprocessing, you should not pass
+                non picklable arguments to the generator
+                as they can't be passed easily to children processes.
+
+        # Returns
+            Scalar test loss (if the model has no metrics)
+            or list of scalars (if the model computes other metrics).
+            The attribute `model.metrics_names` will give you
+            the display labels for the scalar outputs.
+
+        # Raises
+            RuntimeError: if the model was never compiled.
         """
         if self.model is None:
             raise RuntimeError('The model needs to be compiled '
                                'before being used.')
         return self.model.evaluate_generator(generator,
-                                             val_samples,
+                                             steps,
                                              max_q_size=max_q_size,
                                              workers=workers,
                                              pickle_safe=pickle_safe)
 
-    def predict_generator(self, generator, val_samples,
+    @interfaces.legacy_generator_methods_support
+    def predict_generator(self, generator, steps,
                           max_q_size=10, workers=1, pickle_safe=False):
         """Generates predictions for the input samples from a data generator.
+
         The generator should return the same kind of data as accepted by
         `predict_on_batch`.
 
         # Arguments
             generator: generator yielding batches of input samples.
-            val_samples: total number of samples to generate from `generator`
-                before returning.
+            steps: Total number of steps (batches of samples)
+                to yield from `generator` before stopping.
             max_q_size: maximum size for the generator queue
             workers: maximum number of processes to spin up
-            pickle_safe: if True, use process based threading. Note that because
-                this implementation relies on multiprocessing, you should not pass non
-                non picklable arguments to the generator as they can't be passed
-                easily to children processes.
+            pickle_safe: if True, use process based threading.
+                Note that because this implementation
+                relies on multiprocessing, you should not pass
+                non picklable arguments to the generator
+                as they can't be passed easily to children processes.
 
         # Returns
             A Numpy array of predictions.
         """
         if self.model is None:
             self.build()
-        return self.model.predict_generator(generator, val_samples,
+        return self.model.predict_generator(generator, steps,
                                             max_q_size=max_q_size,
                                             workers=workers,
                                             pickle_safe=pickle_safe)
 
     def get_config(self):
-        """Returns the model configuration as a Python list.
-        """
         if isinstance(self.layers[0], legacy_layers.Merge):
             return self.legacy_get_config()
 
@@ -1004,12 +1183,15 @@ class Sequential(Model):
 
         model = cls()
         for conf in config:
-            layer = layers.deserialize(conf)
+            layer = layer_module.deserialize(conf)
             model.add(layer)
         return model
 
     def legacy_get_config(self):
-        """Returns the model configuration as a Python list.
+        """Retrieves the model configuration as a Python list.
+
+        # Returns
+            A list of dicts (each dict is a layer config).
         """
         config = []
         if isinstance(self.layers[0], legacy_layers.Merge):
@@ -1032,8 +1214,6 @@ class Sequential(Model):
 
     @classmethod
     def legacy_from_config(cls, config, layer_cache=None):
-        """Supports legacy formats.
-        """
         if not layer_cache:
             layer_cache = {}
 
@@ -1042,24 +1222,18 @@ class Sequential(Model):
                 class_name = conf['name']
                 name = conf.get('custom_name')
                 conf['name'] = name
-                new_config = {
-                    'class_name': class_name,
-                    'config': conf,
-                }
-                return new_config
+                return {'class_name': class_name,
+                        'config': conf}
             return conf
 
         # the model we will return
         model = cls()
 
         def get_or_create_layer(layer_data):
-            if layer_data['class_name'] == 'Sequential':
-                return Sequential.from_config(layer_data['config'],
-                                              layer_cache=layer_cache)
             name = layer_data['config'].get('name')
             if name in layer_cache:
                 return layer_cache[name]
-            layer = layers.deserialize(layer_data)
+            layer = layer_module.deserialize(layer_data)
             layer_cache[name] = layer
             return layer
 
@@ -1069,7 +1243,7 @@ class Sequential(Model):
             merge_inputs = []
             first_layer_config = first_layer['config']
             for merge_input_config in first_layer_config.pop('layers'):
-                merge_input = layers.deserialize(merge_input_config)
+                merge_input = layer_module.deserialize(merge_input_config)
                 merge_inputs.append(merge_input)
             first_layer_config['layers'] = merge_inputs
             merge = legacy_layers.Merge.from_config(first_layer_config)

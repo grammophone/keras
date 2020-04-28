@@ -117,10 +117,10 @@ class SGD(Optimizer):
     def __init__(self, lr=0.01, momentum=0., decay=0.,
                  nesterov=False, **kwargs):
         super(SGD, self).__init__(**kwargs)
-        self.iterations = K.variable(0.)
-        self.lr = K.variable(lr)
-        self.momentum = K.variable(momentum)
-        self.decay = K.variable(decay)
+        self.iterations = K.variable(0., name='iterations')
+        self.lr = K.variable(lr, name='lr')
+        self.momentum = K.variable(momentum, name='momentum')
+        self.decay = K.variable(decay, name='decay')
         self.initial_decay = decay
         self.nesterov = nesterov
 
@@ -186,12 +186,12 @@ class RMSprop(Optimizer):
     def __init__(self, lr=0.001, rho=0.9, epsilon=1e-8, decay=0.,
                  **kwargs):
         super(RMSprop, self).__init__(**kwargs)
-        self.lr = K.variable(lr)
-        self.rho = K.variable(rho)
+        self.lr = K.variable(lr, name='lr')
+        self.rho = K.variable(rho, name='rho')
         self.epsilon = epsilon
-        self.decay = K.variable(decay)
+        self.decay = K.variable(decay, name='decay')
         self.initial_decay = decay
-        self.iterations = K.variable(0.)
+        self.iterations = K.variable(0., name='iterations')
 
     def get_updates(self, params, constraints, loss):
         grads = self.get_gradients(loss, params)
@@ -244,11 +244,11 @@ class Adagrad(Optimizer):
 
     def __init__(self, lr=0.01, epsilon=1e-8, decay=0., **kwargs):
         super(Adagrad, self).__init__(**kwargs)
-        self.lr = K.variable(lr)
+        self.lr = K.variable(lr, name='lr')
         self.epsilon = epsilon
-        self.decay = K.variable(decay)
+        self.decay = K.variable(decay, name='decay')
         self.initial_decay = decay
-        self.iterations = K.variable(0.)
+        self.iterations = K.variable(0., name='iterations')
 
     def get_updates(self, params, constraints, loss):
         grads = self.get_gradients(loss, params)
@@ -301,12 +301,12 @@ class Adadelta(Optimizer):
     def __init__(self, lr=1.0, rho=0.95, epsilon=1e-8, decay=0.,
                  **kwargs):
         super(Adadelta, self).__init__(**kwargs)
-        self.lr = K.variable(lr)
+        self.lr = K.variable(lr, name='lr')
         self.rho = rho
         self.epsilon = epsilon
-        self.decay = K.variable(decay)
+        self.decay = K.variable(decay, name='decay')
         self.initial_decay = decay
-        self.iterations = K.variable(0.)
+        self.iterations = K.variable(0., name='iterations')
 
     def get_updates(self, params, constraints, loss):
         grads = self.get_gradients(loss, params)
@@ -369,12 +369,12 @@ class Adam(Optimizer):
     def __init__(self, lr=0.001, beta_1=0.9, beta_2=0.999,
                  epsilon=1e-8, decay=0., **kwargs):
         super(Adam, self).__init__(**kwargs)
-        self.iterations = K.variable(0)
-        self.lr = K.variable(lr)
-        self.beta_1 = K.variable(beta_1)
-        self.beta_2 = K.variable(beta_2)
+        self.iterations = K.variable(0, name='iterations')
+        self.lr = K.variable(lr, name='lr')
+        self.beta_1 = K.variable(beta_1, name='beta_1')
+        self.beta_2 = K.variable(beta_2, name='beta_2')
         self.epsilon = epsilon
-        self.decay = K.variable(decay)
+        self.decay = K.variable(decay, name='decay')
         self.initial_decay = decay
 
     def get_updates(self, params, constraints, loss):
@@ -439,12 +439,12 @@ class Adamax(Optimizer):
     def __init__(self, lr=0.002, beta_1=0.9, beta_2=0.999,
                  epsilon=1e-8, decay=0., **kwargs):
         super(Adamax, self).__init__(**kwargs)
-        self.iterations = K.variable(0.)
-        self.lr = K.variable(lr)
-        self.beta_1 = K.variable(beta_1)
-        self.beta_2 = K.variable(beta_2)
+        self.iterations = K.variable(0., name='iterations')
+        self.lr = K.variable(lr, name='lr')
+        self.beta_1 = K.variable(beta_1, name='beta_1')
+        self.beta_2 = K.variable(beta_2, name='beta_2')
         self.epsilon = epsilon
-        self.decay = K.variable(decay)
+        self.decay = K.variable(decay, name='decay')
         self.initial_decay = decay
 
     def get_updates(self, params, constraints, loss):
@@ -515,11 +515,11 @@ class Nadam(Optimizer):
     def __init__(self, lr=0.002, beta_1=0.9, beta_2=0.999,
                  epsilon=1e-8, schedule_decay=0.004, **kwargs):
         super(Nadam, self).__init__(**kwargs)
-        self.iterations = K.variable(0.)
-        self.m_schedule = K.variable(1.)
-        self.lr = K.variable(lr)
-        self.beta_1 = K.variable(beta_1)
-        self.beta_2 = K.variable(beta_2)
+        self.iterations = K.variable(0., name='iterations')
+        self.m_schedule = K.variable(1., name='m_schedule')
+        self.lr = K.variable(lr, name='lr')
+        self.beta_1 = K.variable(beta_1, name='beta_1')
+        self.beta_2 = K.variable(beta_2, name='beta_2')
         self.epsilon = epsilon
         self.schedule_decay = schedule_decay
 
@@ -580,7 +580,7 @@ class TFOptimizer(Optimizer):
 
     def __init__(self, optimizer):
         self.optimizer = optimizer
-        self.iterations = K.variable(0.)
+        self.iterations = K.variable(0., name='iterations')
         self.updates = []
 
     def get_updates(self, params, constraints, loss):
@@ -622,6 +622,18 @@ def serialize(optimizer):
 
 
 def deserialize(config, custom_objects=None):
+    """Inverse of the `serialize` function.
+
+    # Arguments
+        config: Optimizer configuration dictionary.
+        custom_objects: Optional dictionary mapping
+            names (strings) to custom objects
+            (classes and functions)
+            to be considered during deserialization.
+
+    # Returns
+        A Keras Optimizer instance.
+    """
     all_classes = {
         'sgd': SGD,
         'rmsprop': RMSprop,
@@ -632,7 +644,9 @@ def deserialize(config, custom_objects=None):
         'nadam': Nadam,
         'tfoptimizer': TFOptimizer,
     }
-    config['class_name'] = config['class_name'].lower()
+    # Make deserialization case-insensitive for built-in optimizers.
+    if config['class_name'].lower() in all_classes:
+        config['class_name'] = config['class_name'].lower()
     return deserialize_keras_object(config,
                                     module_objects=all_classes,
                                     custom_objects=custom_objects,
@@ -640,6 +654,22 @@ def deserialize(config, custom_objects=None):
 
 
 def get(identifier):
+    """Retrieves a Keras Optimizer instance.
+
+    # Arguments
+        identifier: Optimizer identifier, one of
+            - String: name of an optimizer
+            - Dictionary: configuration dictionary.
+            - Keras Optimizer instance (it will be returned unchanged).
+            - TensorFlow Optimizer instance
+                (it will be wrapped as a Keras Optimizer).
+
+    # Returns
+        A Keras Optimizer instance.
+
+    # Raises
+        ValueError: If `identifier` cannot be interpreted.
+    """
     if K.backend() == 'tensorflow':
         # Wrap TF optimizer instances
         if isinstance(identifier, tf.train.Optimizer):

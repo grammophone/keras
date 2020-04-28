@@ -173,12 +173,36 @@ def transform_matrix_offset_center(matrix, x, y):
     return transform_matrix
 
 
-def apply_transform(x, transform_matrix, channel_axis=0, fill_mode='nearest', cval=0.):
+def apply_transform(x,
+                    transform_matrix,
+                    channel_axis=0,
+                    fill_mode='nearest',
+                    cval=0.):
+    """Apply the image transformation specified by a matrix.
+
+    # Arguments
+        x: 2D numpy array, single image.
+        transform_matrix: Numpy array specifying the geometric transformation.
+        channel_axis: Index of axis for channels in the input tensor.
+        fill_mode: Points outside the boundaries of the input
+            are filled according to the given mode
+            (one of `{'constant', 'nearest', 'reflect', 'wrap'}`).
+        cval: Value used for points outside the boundaries
+            of the input if `mode='constant'`.
+
+    # Returns
+        The transformed version of the input.
+    """
     x = np.rollaxis(x, channel_axis, 0)
     final_affine_matrix = transform_matrix[:2, :2]
     final_offset = transform_matrix[:2, 2]
-    channel_images = [ndi.interpolation.affine_transform(x_channel, final_affine_matrix,
-                                                         final_offset, order=0, mode=fill_mode, cval=cval) for x_channel in x]
+    channel_images = [ndi.interpolation.affine_transform(
+        x_channel,
+        final_affine_matrix,
+        final_offset,
+        order=0,
+        mode=fill_mode,
+        cval=cval) for x_channel in x]
     x = np.stack(channel_images, axis=0)
     x = np.rollaxis(x, 0, channel_axis + 1)
     return x
@@ -295,18 +319,22 @@ def load_img(path, grayscale=False, target_size=None):
                           'The use of `array_to_img` requires PIL.')
     img = pil_image.open(path)
     if grayscale:
-        img = img.convert('L')
-    else:  # Ensure 3 channel even when loaded image is grayscale
-        img = img.convert('RGB')
+        if img.mode != 'L':
+            img = img.convert('L')
+    else:
+        if img.mode != 'RGB':
+            img = img.convert('RGB')
     if target_size:
-        img = img.resize((target_size[1], target_size[0]))
+        wh_tuple = (target_size[1], target_size[0])
+        if img.size != wh_tuple:
+            img = img.resize(wh_tuple)
     return img
 
 
 def list_pictures(directory, ext='jpg|jpeg|bmp|png'):
     return [os.path.join(root, f)
             for root, _, files in os.walk(directory) for f in files
-            if re.match('([\w]+\.(?:' + ext + '))', f)]
+            if re.match(r'([\w]+\.(?:' + ext + '))', f)]
 
 
 class ImageDataGenerator(object):
@@ -414,10 +442,10 @@ class ImageDataGenerator(object):
                              'a tuple or list of two floats. '
                              'Received arg: ', zoom_range)
 
-    def flow(self, X, y=None, batch_size=32, shuffle=True, seed=None,
+    def flow(self, x, y=None, batch_size=32, shuffle=True, seed=None,
              save_to_dir=None, save_prefix='', save_format='jpeg'):
         return NumpyArrayIterator(
-            X, y, self,
+            x, y, self,
             batch_size=batch_size,
             shuffle=shuffle,
             seed=seed,
@@ -446,6 +474,14 @@ class ImageDataGenerator(object):
             follow_links=follow_links)
 
     def standardize(self, x):
+        """Apply the normalization configuration to a batch of inputs.
+
+        # Arguments
+            x: batch of inputs to be normalized.
+
+        # Returns
+            The inputs, normalized.
+        """
         if self.preprocessing_function:
             x = self.preprocessing_function(x)
         if self.rescale:
@@ -486,6 +522,14 @@ class ImageDataGenerator(object):
         return x
 
     def random_transform(self, x):
+        """Randomly augment a single image tensor.
+
+        # Arguments
+            x: 3D tensor, single image.
+
+        # Returns
+            A randomly transformed version of the input (same shape).
+        """
         # x is a single image, so it doesn't have image number at index 0
         img_row_axis = self.row_axis - 1
         img_col_axis = self.col_axis - 1
@@ -567,7 +611,9 @@ class ImageDataGenerator(object):
             augment=False,
             rounds=1,
             seed=None):
-        """Required for featurewise_center, featurewise_std_normalization
+        """Fits internal statistics to some sample data.
+
+        Required for featurewise_center, featurewise_std_normalization
         and zca_whitening.
 
         # Arguments
@@ -629,6 +675,14 @@ class ImageDataGenerator(object):
 
 
 class Iterator(object):
+    """Abstract base class for image data iterators.
+
+    # Arguments
+        n: Integer, total number of samples in the dataset to loop over.
+        batch_size: Integer, size of a batch.
+        shuffle: Boolean, whether to shuffle the data between epochs.
+        seed: Random seeding for data shuffling.
+    """
 
     def __init__(self, n, batch_size, shuffle, seed):
         self.n = n
@@ -643,7 +697,7 @@ class Iterator(object):
         self.batch_index = 0
 
     def _flow_index(self, n, batch_size=32, shuffle=False, seed=None):
-        # ensure self.batch_index is 0
+        # Ensure self.batch_index is 0.
         self.reset()
         while 1:
             if seed is not None:
@@ -665,7 +719,7 @@ class Iterator(object):
                    current_index, current_batch_size)
 
     def __iter__(self):
-        # needed if we want to do something like:
+        # Needed if we want to do something like:
         # for x, y in data_gen.flow(...):
         return self
 
@@ -674,6 +728,26 @@ class Iterator(object):
 
 
 class NumpyArrayIterator(Iterator):
+    """Iterator yielding data from a Numpy array.
+
+    # Arguments
+        x: Numpy array of input data.
+        y: Numpy array of targets data.
+        image_data_generator: Instance of `ImageDataGenerator`
+            to use for random transformations and normalization.
+        batch_size: Integer, size of a batch.
+        shuffle: Boolean, whether to shuffle the data between epochs.
+        seed: Random seed for data shuffling.
+        data_format: String, one of `channels_first`, `channels_last`.
+        save_to_dir: Optional directory where to save the pictures
+            being yielded, in a viewable format. This is useful
+            for visualizing the random transformations being
+            applied, for debugging purposes.
+        save_prefix: String prefix to use for saving sample
+            images (if `save_to_dir` is set).
+        save_format: Format to use for saving sample images
+            (if `save_to_dir` is set).
+    """
 
     def __init__(self, x, y, image_data_generator,
                  batch_size=32, shuffle=False, seed=None,
@@ -713,10 +787,13 @@ class NumpyArrayIterator(Iterator):
         super(NumpyArrayIterator, self).__init__(x.shape[0], batch_size, shuffle, seed)
 
     def next(self):
-        # for python 2.x.
+        """For python 2.x.
+
+        # Returns
+            The next batch.
+        """
         # Keeps under lock only the mechanism which advances
-        # the indexing of each batch
-        # see http://anandology.com/blog/using-iterators-and-generators/
+        # the indexing of each batch.
         with self.lock:
             index_array, current_index, current_batch_size = next(self.index_generator)
         # The transformation of images is not under thread lock
@@ -742,12 +819,45 @@ class NumpyArrayIterator(Iterator):
 
 
 class DirectoryIterator(Iterator):
+    """Iterator capable of reading images from a directory on disk.
+
+    # Arguments
+        directory: Path to the directory to read images from.
+            Each subdirectory in this directory will be
+            considered to contain images from one class,
+            or alternatively you could specify class subdirectories
+            via the `classes` argument.
+        image_data_generator: Instance of `ImageDataGenerator`
+            to use for random transformations and normalization.
+        target_size: tuple of integers, dimensions to resize input images to.
+        color_mode: One of `"rgb"`, `"grayscale"`. Color mode to read images.
+        classes: Optional list of strings, names of sudirectories
+            containing images from each class (e.g. `["dogs", "cats"]`).
+            It will be computed automatically if not set.
+        class_mode: Mode for yielding the targets:
+            `"binary"`: binary targets (if there are only two classes),
+            `"categorical"`: categorical targets,
+            `"sparse"`: integer targets,
+            `None`: no targets get yielded (only input images are yielded).
+        batch_size: Integer, size of a batch.
+        shuffle: Boolean, whether to shuffle the data between epochs.
+        seed: Random seed for data shuffling.
+        data_format: String, one of `channels_first`, `channels_last`.
+        save_to_dir: Optional directory where to save the pictures
+            being yielded, in a viewable format. This is useful
+            for visualizing the random transformations being
+            applied, for debugging purposes.
+        save_prefix: String prefix to use for saving sample
+            images (if `save_to_dir` is set).
+        save_format: Format to use for saving sample images
+            (if `save_to_dir` is set).
+    """
 
     def __init__(self, directory, image_data_generator,
                  target_size=(256, 256), color_mode='rgb',
-                 data_format=None,
                  classes=None, class_mode='categorical',
                  batch_size=32, shuffle=True, seed=None,
+                 data_format=None,
                  save_to_dir=None, save_prefix='', save_format='jpeg',
                  follow_links=False):
         if data_format is None:
@@ -831,6 +941,11 @@ class DirectoryIterator(Iterator):
         super(DirectoryIterator, self).__init__(self.samples, batch_size, shuffle, seed)
 
     def next(self):
+        """For python 2.x.
+
+        # Returns
+            The next batch.
+        """
         with self.lock:
             index_array, current_index, current_batch_size = next(self.index_generator)
         # The transformation of images is not under thread lock

@@ -4,7 +4,6 @@ import numpy as np
 _FLOATX = 'float32'
 _EPSILON = 10e-8
 _IMAGE_DATA_FORMAT = 'channels_last'
-_LEGACY_WEIGHT_ORDERING = False
 
 
 def epsilon():
@@ -126,8 +125,7 @@ def image_data_format():
 
 
 def set_image_data_format(data_format):
-    """Sets the value of the image dimension
-    ordering convention ('channels_first' or 'channels_last').
+    """Sets the value of the data format convention.
 
     # Arguments
         data_format: string. `'channels_first'` or `'channels_last'`.
@@ -177,11 +175,38 @@ def is_keras_tensor(x):
         return False
 
 
-def set_legacy_weight_ordering(value):
-    global _LEGACY_WEIGHT_ORDERING
-    assert value in {True, False}
-    _LEGACY_WEIGHT_ORDERING = value
+# Legacy methods
+
+def set_image_dim_ordering(dim_ordering):
+    """Sets the value of the image data format.
+
+    # Arguments
+        data_format: string. `'channels_first'` or `'channels_last'`.
+
+    # Example
+    ```python
+        >>> from keras import backend as K
+        >>> K.image_data_format()
+        'channels_first'
+        >>> K.set_image_data_format('channels_last')
+        >>> K.image_data_format()
+        'channels_last'
+    ```
+    """
+    global _IMAGE_DATA_FORMAT
+    if dim_ordering not in {'tf', 'th'}:
+        raise ValueError('Unknown dim_ordering:', dim_ordering)
+    if dim_ordering == 'th':
+        data_format = 'channels_first'
+    else:
+        data_format = 'channels_last'
+    _IMAGE_DATA_FORMAT = data_format
 
 
-def legacy_weight_ordering():
-    return _LEGACY_WEIGHT_ORDERING
+def image_dim_ordering():
+    """Legacy getter for data format.
+    """
+    if _IMAGE_DATA_FORMAT == 'channels_first':
+        return 'th'
+    else:
+        return 'tf'

@@ -16,7 +16,11 @@ except ImportError:
 import inspect
 import numpy as np
 from .common import _FLOATX, floatx, _EPSILON, image_data_format
+# Legacy functions
+from .common import set_image_dim_ordering, image_dim_ordering
+
 py_all = all
+py_sum = sum
 
 
 # INTERNAL UTILS
@@ -269,7 +273,9 @@ def count_params(x):
 
     Return: numpy integer.
     """
-    return np.prod(x.shape.eval())
+    # We don't want those compilation to show up in Theano profiler.
+    f = theano.function([], x.shape, profile=False)
+    return np.prod(f())
 
 
 def cast(x, dtype):
@@ -304,11 +310,21 @@ Assumed overridden:
 
 
 def dot(x, y):
-    # TODO: `keras_shape` inference.
     if is_sparse(x):
-        return th_sparse_module.basic.structured_dot(x, y)
+        out = th_sparse_module.basic.structured_dot(x, y)
     else:
-        return T.dot(x, y)
+        out = T.dot(x, y)
+    if hasattr(x, '_keras_shape') and hasattr(y, '_keras_shape'):
+        x_shape = list(x._keras_shape)
+        y_shape = list(y._keras_shape)
+        if len(x_shape) > 0:
+            x_shape.pop()
+        if len(y_shape) == 1:
+            y_shape.pop()
+        elif len(y_shape) > 1:
+            y_shape.pop(-2)
+        out._keras_shape = tuple(x_shape + y_shape)
+    return out
 
 
 def batch_dot(x, y, axes=None):
@@ -349,7 +365,6 @@ def batch_dot(x, y, axes=None):
 
         output_shape = (100, 30)
     """
-    # TODO: `keras_shape` inference.
     if isinstance(axes, int):
         axes = (axes, axes)
     if axes is None:
@@ -358,12 +373,26 @@ def batch_dot(x, y, axes=None):
     out = T.batched_tensordot(x, y, axes=axes)
     if ndim(out) == 1:
         out = expand_dims(out, 1)
+
+    if hasattr(x, '_keras_shape') and hasattr(y, '_keras_shape'):
+        shape = []
+        for axis in range(len(x._keras_shape)):
+            if axis != axes[0]:
+                shape.append(x._keras_shape[axis])
+        for axis in range(1, len(y._keras_shape)):
+            if axis != axes[1]:
+                shape.append(y._keras_shape[axis])
+        if len(shape) == 1:
+            shape.append(1)     # Expand dims if ndim == 1
+        out._keras_shape = tuple(shape)
     return out
 
 
 def transpose(x):
-    # TODO: `keras_shape` inference.
-    return T.transpose(x)
+    y = T.transpose(x)
+    if hasattr(x, '_keras_shape'):
+        y._keras_shape = tuple(reversed(x._keras_shape))
+    return y
 
 
 def gather(reference, indices):
@@ -372,8 +401,11 @@ def gather(reference, indices):
 
     Return: a tensor of same type as reference.
     """
-    # TODO: `keras_shape` inference.
-    return reference[indices]
+    y = reference[indices]
+    if hasattr(reference, '_keras_shape') and hasattr(indices, '_keras_shape'):
+        l = indices._keras_shape[0]
+        y._keras_shape = (l,) + reference._keras_shape[1:]
+    return y
 
 
 # ELEMENT-WISE OPERATIONS
@@ -494,11 +526,11 @@ def greater_equal(x, y):
     return T.ge(x, y)
 
 
-def lesser(x, y):
+def less(x, y):
     return T.lt(x, y)
 
 
-def lesser_equal(x, y):
+def less_equal(x, y):
     return T.le(x, y)
 
 
@@ -527,6 +559,16 @@ def normalize_batch_in_training(x, gamma, beta,
     if not hasattr(T.nnet.bn, 'batch_normalization_train'):
         return _old_normalize_batch_in_training(x, gamma, beta, reduction_axes, epsilon)
 
+    if gamma is None:
+        if beta is None:
+            gamma = ones_like(x)
+        else:
+            gamma = ones_like(beta)
+    if beta is None:
+        if gamma is None:
+            beta = zeros_like(x)
+        beta = zeros_like(gamma)
+
     normed, mean, stdinv = T.nnet.bn.batch_normalization_train(
         x, gamma, beta, reduction_axes, epsilon)
 
@@ -540,6 +582,11 @@ def batch_normalization(x, mean, var, beta, gamma, epsilon=1e-3):
     # T.nnet.bn.batch_normalization_test is deprecated
     if not hasattr(T.nnet.bn, 'batch_normalization_test'):
         return _old_batch_normalization(x, mean, var, beta, gamma, epsilon)
+
+    if gamma is None:
+        gamma = ones_like(var)
+    if beta is None:
+        beta = zeros_like(mean)
 
     if mean.ndim == 1:
         # based on TensorFlow's default: normalize along rightmost dimension
@@ -557,6 +604,11 @@ def _old_normalize_batch_in_training(x, gamma, beta,
                                      reduction_axes, epsilon=1e-3):
     """Computes mean and std for batch then apply batch_normalization on batch.
     """
+    if gamma is None:
+        gamma = ones_like(x)
+    if beta is None:
+        beta = zeros_like(x)
+
     dev = theano.config.device
     use_cudnn = ndim(x) < 5 and reduction_axes == [0, 2, 3] and (dev.startswith('cuda') or dev.startswith('gpu'))
     if use_cudnn:
@@ -599,6 +651,11 @@ def _old_normalize_batch_in_training(x, gamma, beta,
 def _old_batch_normalization(x, mean, var, beta, gamma, epsilon=1e-3):
     """Apply batch normalization on x given mean, var, beta and gamma.
     """
+    if gamma is None:
+        gamma = ones_like(var)
+    if beta is None:
+        beta = zeros_like(mean)
+
     if mean.ndim == 1 and x.ndim > 1:
         # in TensorFlow's batch_normalization, if the parameters are vectors
         # the batch normalization should be applied along the rightmost axis.
@@ -670,9 +727,11 @@ def permute_dimensions(x, pattern):
     pattern should be a tuple or list of
     dimension indices, e.g. [0, 2, 1].
     """
-    # TODO: `keras_shape` inference.
     pattern = tuple(pattern)
-    return x.dimshuffle(pattern)
+    y = x.dimshuffle(pattern)
+    if hasattr(x, '_keras_shape'):
+        y._keras_shape = tuple(np.asarray(x._keras_shape)[list(pattern)])
+    return y
 
 
 def repeat_elements(x, rep, axis):
@@ -681,8 +740,12 @@ def repeat_elements(x, rep, axis):
     If x has shape (s1, s2, s3) and axis=1, the output
     will have shape (s1, s2 * rep, s3).
     """
-    # TODO: `keras_shape` inference.
-    return T.repeat(x, rep, axis=axis)
+    y = T.repeat(x, rep, axis=axis)
+    if hasattr(x, '_keras_shape'):
+        y._keras_shape = list(x._keras_shape)
+        y._keras_shape[axis] = x._keras_shape[axis] * rep
+        y._keras_shape = tuple(y._keras_shape)
+    return y
 
 
 def resize_images(X, height_factor, width_factor, data_format):
@@ -692,7 +755,6 @@ def resize_images(X, height_factor, width_factor, data_format):
     by a factor of (height_factor, width_factor). Both factors should be
     positive integers.
     """
-    # TODO: `keras_shape` inference.
     if data_format == 'channels_first':
         output = repeat_elements(X, height_factor, axis=2)
         output = repeat_elements(output, width_factor, axis=3)
@@ -712,7 +774,6 @@ def resize_volumes(X, depth_factor, height_factor, width_factor, data_format):
     by a factor of (depth_factor, height_factor, width_factor).
     Both factors should be positive integers.
     """
-    # TODO: `keras_shape` inference.
     if data_format == 'channels_first':
         output = repeat_elements(X, depth_factor, axis=2)
         output = repeat_elements(output, height_factor, axis=3)
@@ -733,10 +794,15 @@ def repeat(x, n):
     If x has shape (samples, dim) and n=2,
     the output will have shape (samples, 2, dim).
     """
-    # TODO: `keras_shape` inference.
     assert x.ndim == 2
-    x = x.dimshuffle((0, 'x', 1))
-    return T.extra_ops.repeat(x, n, axis=1)
+    y = x.dimshuffle((0, 'x', 1))
+    y = T.extra_ops.repeat(y, n, axis=1)
+    if hasattr(x, '_keras_shape'):
+        shape = list(x._keras_shape)
+        shape.insert(1, n)
+        y._keras_shape = tuple(shape)
+
+    return y
 
 
 def arange(start, stop=None, step=1, dtype='int32'):
@@ -753,123 +819,98 @@ def arange(start, stop=None, step=1, dtype='int32'):
 
 
 def tile(x, n):
-    # TODO: `keras_shape` inference.
-    return T.tile(x, n)
+    y = T.tile(x, n)
+    if hasattr(x, '_keras_shape'):
+        xshape = np.asarray(x._keras_shape)
+        n = np.asarray(n)
+        diff = len(xshape) - len(n)
+        if diff > 0:
+            n = np.append([1] * diff, n)
+        else:
+            xshape = np.append([1] * -diff, xshape)
+        y._keras_shape = tuple(xshape * n)
+
+    return y
 
 
 def flatten(x):
-    # TODO: `keras_shape` inference.
-    return T.flatten(x)
+    y = T.flatten(x)
+    if hasattr(x, '_keras_shape'):
+        y._keras_shape = (np.prod(x._keras_shape), )
+    return y
 
 
 def batch_flatten(x):
     """Turn a n-D tensor into a 2D tensor where
     the first dimension is conserved.
     """
-    # TODO: `keras_shape` inference.
-    x = T.reshape(x, (x.shape[0], T.prod(x.shape) // x.shape[0]))
-    return x
+    y = T.reshape(x, (x.shape[0], T.prod(x.shape[1:])))
+    if hasattr(x, '_keras_shape'):
+        y._keras_shape = (x._keras_shape[0], np.prod(x._keras_shape[1:]))
+    return y
 
 
-def expand_dims(x, dim=-1):
+def expand_dims(x, axis=-1):
     """Add a 1-sized dimension at index "dim".
     """
-    # TODO: `keras_shape` inference.
     pattern = [i for i in range(x.type.ndim)]
-    if dim < 0:
+    if axis < 0:
         if x.type.ndim == 0:
-            dim = 0
+            axis = 0
         else:
-            dim = dim % x.type.ndim + 1
-    pattern.insert(dim, 'x')
-    return x.dimshuffle(pattern)
+            axis = axis % x.type.ndim + 1
+    pattern.insert(axis, 'x')
+    y = x.dimshuffle(pattern)
+    if hasattr(x, '_keras_shape'):
+        shape = list(x._keras_shape)
+        shape.insert(axis, 1)
+        y._keras_shape = tuple(shape)
+    return y
 
 
 def squeeze(x, axis):
     """Remove a 1-dimension from the tensor at index "axis".
     """
-    # TODO: `keras_shape` inference.
     shape = list(x.shape)
     shape.pop(axis)
-    return T.reshape(x, tuple(shape))
+    y = T.reshape(x, tuple(shape))
+    if hasattr(x, '_keras_shape'):
+        kshape = list(x._keras_shape)
+        kshape.pop(axis)
+        y._keras_shape = tuple(kshape)
+    return y
 
 
-def temporal_padding(x, padding=1):
+def temporal_padding(x, padding=(1, 1)):
     """Pad the middle dimension of a 3D tensor
     with "padding" zeros left and right.
 
     Apologies for the inane API, but Theano makes this
     really hard.
     """
-    # TODO: `keras_shape` inference.
+    assert len(padding) == 2
     input_shape = x.shape
     output_shape = (input_shape[0],
-                    input_shape[1] + 2 * padding,
+                    input_shape[1] + padding[0] + padding[1],
                     input_shape[2])
     output = T.zeros(output_shape)
-    return T.set_subtensor(output[:, padding:x.shape[1] + padding, :], x)
+    result = T.set_subtensor(output[:, padding[0]:x.shape[1] + padding[0], :], x)
+    if hasattr(x, '_keras_shape'):
+        result._keras_shape = (x._keras_shape[0],
+                               x._keras_shape[1] + py_sum(padding),
+                               x._keras_shape[2])
+    return result
 
 
-def asymmetric_temporal_padding(x, left_pad=1, right_pad=1):
-    """Pad the middle dimension of a 3D tensor
-    with "left_pad" zeros left and "right_pad" right.
-
-    Apologies for the inane API, but Theano makes this
-    really hard.
-    """
-    # TODO: `keras_shape` inference.
-    input_shape = x.shape
-    output_shape = (input_shape[0],
-                    input_shape[1] + left_pad + right_pad,
-                    input_shape[2])
-    output = T.zeros(output_shape)
-    return T.set_subtensor(output[:, left_pad:x.shape[1] + left_pad, :], x)
-
-
-def spatial_2d_padding(x, padding=(1, 1), data_format=None):
+def spatial_2d_padding(x, padding=((1, 1), (1, 1)), data_format=None):
     """Pad the 2nd and 3rd dimensions of a 4D tensor
     with "padding[0]" and "padding[1]" (resp.) zeros left and right.
     """
-    # TODO: `keras_shape` inference.
-    if data_format is None:
-        data_format = image_data_format()
-    if data_format not in {'channels_first', 'channels_last'}:
-        raise ValueError('Unknown data_format ' + str(data_format))
-
-    input_shape = x.shape
-    if data_format == 'channels_first':
-        output_shape = (input_shape[0],
-                        input_shape[1],
-                        input_shape[2] + 2 * padding[0],
-                        input_shape[3] + 2 * padding[1])
-        output = T.zeros(output_shape)
-        indices = (slice(None),
-                   slice(None),
-                   slice(padding[0], input_shape[2] + padding[0]),
-                   slice(padding[1], input_shape[3] + padding[1]))
-
-    elif data_format == 'channels_last':
-        output_shape = (input_shape[0],
-                        input_shape[1] + 2 * padding[0],
-                        input_shape[2] + 2 * padding[1],
-                        input_shape[3])
-        output = T.zeros(output_shape)
-        indices = (slice(None),
-                   slice(padding[0], input_shape[1] + padding[0]),
-                   slice(padding[1], input_shape[2] + padding[1]),
-                   slice(None))
-    else:
-        raise ValueError('Invalid data_format:', data_format)
-    return T.set_subtensor(output[indices], x)
-
-
-def asymmetric_spatial_2d_padding(x, top_pad=1, bottom_pad=1,
-                                  left_pad=1, right_pad=1,
-                                  data_format=None):
-    """Pad the rows and columns of a 4D tensor
-    with "top_pad", "bottom_pad", "left_pad", "right_pad" (resp.) zeros
-    rows on top, bottom; cols on left, right.
-    """
+    assert len(padding) == 2
+    assert len(padding[0]) == 2
+    assert len(padding[1]) == 2
+    top_pad, bottom_pad = padding[0]
+    left_pad, right_pad = padding[1]
     if data_format is None:
         data_format = image_data_format()
     if data_format not in {'channels_first', 'channels_last'}:
@@ -899,7 +940,9 @@ def asymmetric_spatial_2d_padding(x, top_pad=1, bottom_pad=1,
                    slice(None))
     else:
         raise ValueError('Invalid data_format:', data_format)
-    return T.set_subtensor(output[indices], x)
+    y = T.set_subtensor(output[indices], x)
+    y._keras_shape = output_shape
+    return y
 
 
 def spatial_3d_padding(x, padding=((1, 1), (1, 1), (1, 1)), data_format=None):
@@ -942,8 +985,8 @@ def spatial_3d_padding(x, padding=((1, 1), (1, 1), (1, 1)), data_format=None):
     return T.set_subtensor(output[indices], x)
 
 
-def stack(x):
-    return T.stack(*x)
+def stack(x, axis=0):
+    return T.stack(x, axis=axis)
 
 
 def one_hot(indices, num_classes):
@@ -1336,7 +1379,7 @@ def categorical_crossentropy(output, target, from_logits=False):
 
 def sparse_categorical_crossentropy(output, target, from_logits=False):
     target = T.cast(T.flatten(target), 'int32')
-    target = T.extra_ops.to_one_hot(target, num_classes=output.shape[-1])
+    target = T.extra_ops.to_one_hot(target, nb_class=output.shape[-1])
     target = reshape(target, shape(output))
     return categorical_crossentropy(output, target, from_logits)
 
@@ -1558,14 +1601,14 @@ def _postprocess_conv3d_output(conv_out, x,
     return conv_out
 
 
-def conv1d(x, kernel, stride=1, padding='valid',
+def conv1d(x, kernel, strides=1, padding='valid',
            data_format=None, dilation_rate=1):
     """1D convolution.
 
     # Arguments
         kernel: kernel tensor.
         strides: stride integer.
-        padding: string, "same" or "valid".
+        padding: string, `"same"`, `"causal"` or `"valid"`.
         data_format: string, one of "channels_last", "channels_first"
         dilation_rate: integer.
     """
@@ -1573,6 +1616,18 @@ def conv1d(x, kernel, stride=1, padding='valid',
         data_format = image_data_format()
     if data_format not in {'channels_first', 'channels_last'}:
         raise ValueError('Unknown data_format ', data_format)
+
+    if hasattr(kernel, '_keras_shape'):
+        kernel_shape = kernel._keras_shape
+    else:
+        kernel_shape = None
+    if padding == 'causal':
+        # causal (dilated) convolution:
+        if not kernel_shape:
+            raise AttributeError('Causal padding requires kernel._keras_shape set.')
+        left_pad = dilation_rate * (kernel_shape[0] - 1)
+        x = temporal_padding(x, (left_pad, 0))
+        padding = 'valid'
     if hasattr(x, '_keras_shape'):
         shape = x._keras_shape
     else:
@@ -1593,7 +1648,7 @@ def conv1d(x, kernel, stride=1, padding='valid',
             x._keras_shape = (shape[0], shape[1], shape[2], 1)
     # update dilation rate, strides
     dilation_rate = (dilation_rate, 1)
-    strides = (stride, 1)
+    strides = (strides, 1)
     # add dim to kernel (always same format independently of data_format)
     # i.e. (rows, 1, input_depth, depth)
     kernel = expand_dims(kernel, 1)
@@ -1759,9 +1814,9 @@ def pool2d(x, pool_size, strides=(1, 1), padding='valid',
     if padding == 'same':
         w_pad = pool_size[0] - 2 if pool_size[0] > 2 and pool_size[0] % 2 == 1 else pool_size[0] - 1
         h_pad = pool_size[1] - 2 if pool_size[1] > 2 and pool_size[1] % 2 == 1 else pool_size[1] - 1
-        padding = (w_pad, h_pad)
+        pad = (w_pad, h_pad)
     elif padding == 'valid':
-        padding = (0, 0)
+        pad = (0, 0)
     else:
         raise ValueError('Invalid border mode:', padding)
 
@@ -1774,20 +1829,18 @@ def pool2d(x, pool_size, strides=(1, 1), padding='valid',
     if pool_mode == 'max':
         pool_out = pool.pool_2d(x, ws=pool_size, stride=strides,
                                 ignore_border=True,
-                                pad=padding,
+                                pad=pad,
                                 mode='max')
     elif pool_mode == 'avg':
         pool_out = pool.pool_2d(x, ws=pool_size, stride=strides,
                                 ignore_border=True,
-                                pad=padding,
+                                pad=pad,
                                 mode='average_exc_pad')
     else:
         raise ValueError('Invalid pooling mode:', pool_mode)
-
     if padding == 'same':
         expected_width = (x.shape[2] + strides[0] - 1) // strides[0]
         expected_height = (x.shape[3] + strides[1] - 1) // strides[1]
-
         pool_out = pool_out[:, :,
                             : expected_width,
                             : expected_height]

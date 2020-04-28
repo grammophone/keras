@@ -11,6 +11,7 @@ from .recurrent import Recurrent
 import numpy as np
 from ..engine import InputSpec
 from ..utils import conv_utils
+from ..legacy import interfaces
 
 
 class ConvRecurrent2D(Recurrent):
@@ -270,6 +271,7 @@ class ConvLSTM2D(ConvRecurrent2D):
         cells output
     """
 
+    @interfaces.legacy_convlstm2d_support
     def __init__(self, filters,
                  kernel_size,
                  strides=(1, 1),
@@ -318,6 +320,7 @@ class ConvLSTM2D(ConvRecurrent2D):
         self.kernel_regularizer = regularizers.get(kernel_regularizer)
         self.recurrent_regularizer = regularizers.get(recurrent_regularizer)
         self.bias_regularizer = regularizers.get(bias_regularizer)
+        self.activity_regularizer = regularizers.get(activity_regularizer)
 
         self.kernel_constraint = constraints.get(kernel_constraint)
         self.recurrent_constraint = constraints.get(recurrent_constraint)
@@ -334,7 +337,7 @@ class ConvLSTM2D(ConvRecurrent2D):
             self.reset_states()
         else:
             # initial states: 2 all-zero tensor of shape (filters)
-            self.states = [None, None, None, None]
+            self.states = [None, None]
 
         if self.data_format == 'channels_first':
             channel_axis = 1
@@ -366,9 +369,9 @@ class ConvLSTM2D(ConvRecurrent2D):
                                         regularizer=self.bias_regularizer,
                                         constraint=self.bias_constraint)
             if self.unit_forget_bias:
-                self.bias += K.concatenate([K.zeros((self.filters,)),
-                                           K.ones((self.filters,)),
-                                           K.zeros((self.filters * 2,))])
+                bias_value = np.zeros((self.filters * 4,))
+                bias_value[self.filters: self.filters * 2] = 1.
+                K.set_value(self.bias, bias_value)
         else:
             self.bias = None
 
@@ -413,9 +416,10 @@ class ConvLSTM2D(ConvRecurrent2D):
         input_shape = self.input_spec.shape
         output_shape = self.compute_output_shape(input_shape)
         if not input_shape[0]:
-            raise ValueError('If a RNN is stateful, a complete ' +
-                             'input_shape must be provided ' +
-                             '(including batch size).')
+            raise ValueError('If a RNN is stateful, a complete '
+                             'input_shape must be provided '
+                             '(including batch size). '
+                             'Got input shape: ' + str(input_shape))
 
         if self.return_sequences:
             out_row, out_col, out_filter = output_shape[2:]
@@ -529,6 +533,7 @@ class ConvLSTM2D(ConvRecurrent2D):
                   'kernel_regularizer': regularizers.serialize(self.kernel_regularizer),
                   'recurrent_regularizer': regularizers.serialize(self.recurrent_regularizer),
                   'bias_regularizer': regularizers.serialize(self.bias_regularizer),
+                  'activity_regularizer': regularizers.serialize(self.activity_regularizer),
                   'kernel_constraint': constraints.serialize(self.kernel_constraint),
                   'recurrent_constraint': constraints.serialize(self.recurrent_constraint),
                   'bias_constraint': constraints.serialize(self.bias_constraint),
